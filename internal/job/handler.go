@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type CreateJobRequest struct {
@@ -33,13 +35,12 @@ func CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newJob := Job{
-		ID:        "job-001",
+		ID:        uuid.NewString(),
 		Type:      request.Type,
 		Payload:   request.Payload,
 		Status:    "queued",
 		CreatedAt: time.Now(),
 	}
-
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(newJob)
 }
