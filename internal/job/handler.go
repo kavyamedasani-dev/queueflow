@@ -16,14 +16,22 @@ type CreateJobRequest struct {
 	Payload map[string]any `json:"payload"`
 }
 
-func CreateJobHandler(w http.ResponseWriter, r *http.Request) {
+func JobsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if r.Method != http.MethodPost {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-		return
-	}
+	switch r.Method {
+	case http.MethodPost:
+		createJob(w, r)
 
+	case http.MethodGet:
+		listJobs(w)
+
+	default:
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	}
+}
+
+func createJob(w http.ResponseWriter, r *http.Request) {
 	var request CreateJobRequest
 
 	err := json.NewDecoder(r.Body).Decode(&request)
@@ -49,6 +57,12 @@ func CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(newJob)
+}
+
+func listJobs(w http.ResponseWriter) {
+	jobs := store.List()
+
+	json.NewEncoder(w).Encode(jobs)
 }
 
 func GetJobHandler(w http.ResponseWriter, r *http.Request) {

@@ -27,3 +27,16 @@ func (s *Store) Get(id string) (Job, bool) {
 	job, exists := s.jobs[id]
 	return job, exists
 }
+
+func (s *Store) List() []Job {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	jobs := make([]Job, 0, len(s.jobs))
+
+	for _, job := range s.jobs {
+		jobs = append(jobs, job)
+	}
+
+	return jobs
+}

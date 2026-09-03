@@ -20,7 +20,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	http.HandleFunc("/health", healthHandler)
-	http.HandleFunc("/jobs", job.CreateJobHandler)
+	http.HandleFunc("/jobs", job.JobsHandler)
 	http.HandleFunc("/jobs/", job.GetJobHandler)
 
 	log.Println("QueueFlow server starting on http://localhost:8080")
