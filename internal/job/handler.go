@@ -3,10 +3,13 @@ package job
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var store = NewStore()
 
 type CreateJobRequest struct {
 	Type    string         `json:"type"`
@@ -41,6 +44,33 @@ func CreateJobHandler(w http.ResponseWriter, r *http.Request) {
 		Status:    "queued",
 		CreatedAt: time.Now(),
 	}
+
+	store.Save(newJob)
+
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(newJob)
+}
+
+func GetJobHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/jobs/")
+
+	if id == "" {
+		http.Error(w, `{"error":"job id is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	existingJob, exists := store.Get(id)
+	if !exists {
+		http.Error(w, `{"error":"job not found"}`, http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(existingJob)
 }
