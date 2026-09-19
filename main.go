@@ -19,6 +19,8 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	job.StartWorker()
+
 	http.HandleFunc("/health", healthHandler)
 	http.HandleFunc("/jobs", job.JobsHandler)
 	http.HandleFunc("/jobs/", job.GetJobHandler)
