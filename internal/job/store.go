@@ -40,3 +40,18 @@ func (s *Store) List() []Job {
 
 	return jobs
 }
+
+func (s *Store) UpdateStatus(id string, status string) (Job, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, exists := s.jobs[id]
+	if !exists {
+		return Job{}, false
+	}
+
+	job.Status = status
+	s.jobs[id] = job
+
+	return job, true
+}

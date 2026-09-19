@@ -16,6 +16,10 @@ type CreateJobRequest struct {
 	Payload map[string]any `json:"payload"`
 }
 
+type UpdateStatusRequest struct {
+	Status string `json:"status"`
+}
+
 func JobsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -68,12 +72,19 @@ func listJobs(w http.ResponseWriter) {
 func GetJobHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
+	path := strings.TrimPrefix(r.URL.Path, "/jobs/")
+
+	if strings.HasSuffix(path, "/status") {
+		updateJobStatus(w, r, path)
+		return
+	}
+
 	if r.Method != http.MethodGet {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		return
 	}
 
-	id := strings.TrimPrefix(r.URL.Path, "/jobs/")
+	id := path
 
 	if id == "" {
 		http.Error(w, `{"error":"job id is required"}`, http.StatusBadRequest)
@@ -87,4 +98,39 @@ func GetJobHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(existingJob)
+}
+
+func updateJobStatus(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method != http.MethodPatch {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := strings.TrimSuffix(path, "/status")
+
+	if id == "" {
+		http.Error(w, `{"error":"job id is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	var request UpdateStatusRequest
+
+	err := json.NewDecoder(r.Body).Decode(&request)
+	if err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if request.Status == "" {
+		http.Error(w, `{"error":"status is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	updatedJob, exists := store.UpdateStatus(id, request.Status)
+	if !exists {
+		http.Error(w, `{"error":"job not found"}`, http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(updatedJob)
 }
