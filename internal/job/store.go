@@ -55,3 +55,18 @@ func (s *Store) UpdateStatus(id string, status string) (Job, bool) {
 
 	return job, true
 }
+
+func (s *Store) IncrementRetry(id string) (Job, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, exists := s.jobs[id]
+	if !exists {
+		return Job{}, false
+	}
+
+	job.Retries++
+	s.jobs[id] = job
+
+	return job, true
+}

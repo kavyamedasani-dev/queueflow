@@ -50,11 +50,13 @@ func createJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newJob := Job{
-		ID:        uuid.NewString(),
-		Type:      request.Type,
-		Payload:   request.Payload,
-		Status:    "queued",
-		CreatedAt: time.Now(),
+		ID:         uuid.NewString(),
+		Type:       request.Type,
+		Payload:    request.Payload,
+		Status:     "queued",
+		Retries:    0,
+		MaxRetries: 3,
+		CreatedAt:  time.Now(),
 	}
 
 	store.Save(newJob)
