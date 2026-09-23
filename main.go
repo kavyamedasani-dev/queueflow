@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/joho/godotenv"
 	"github.com/kavyamedasani-dev/queueflow/internal/job"
 )
 
@@ -20,6 +21,14 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// Load environment variables from .env.
+	// If the file does not exist, QueueFlow can still use
+	// environment variables configured by the operating system.
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("No .env file found, using system environment variables")
+	}
+
 	databaseURL := os.Getenv("DATABASE_URL")
 
 	if databaseURL == "" {
