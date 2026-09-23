@@ -24,6 +24,16 @@ func SetStore(s *Store) {
 	store = s
 }
 
+// writeJSONError sends errors consistently as JSON.
+func writeJSONError(w http.ResponseWriter, message string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error": message,
+	})
+}
+
 func JobsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -35,22 +45,52 @@ func JobsHandler(w http.ResponseWriter, r *http.Request) {
 		listJobs(w)
 
 	default:
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		writeJSONError(
+			w,
+			"method not allowed",
+			http.StatusMethodNotAllowed,
+		)
 	}
 }
 
 func createJob(w http.ResponseWriter, r *http.Request) {
 	var request CreateJobRequest
 
-	err := json.NewDecoder(r.Body).Decode(&request)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	err := decoder.Decode(&request)
 	if err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		writeJSONError(
+			w,
+			"invalid request body",
+			http.StatusBadRequest,
+		)
 		return
 	}
 
+	request.Type = strings.TrimSpace(request.Type)
+
 	if request.Type == "" {
-		http.Error(w, `{"error":"type is required"}`, http.StatusBadRequest)
+		writeJSONError(
+			w,
+			"type is required",
+			http.StatusBadRequest,
+		)
 		return
+	}
+
+	if len(request.Type) > 100 {
+		writeJSONError(
+			w,
+			"type must be 100 characters or fewer",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	if request.Payload == nil {
+		request.Payload = map[string]any{}
 	}
 
 	newJob := Job{
@@ -65,22 +105,23 @@ func createJob(w http.ResponseWriter, r *http.Request) {
 
 	err = store.Save(newJob)
 	if err != nil {
-		http.Error(
+		writeJSONError(
 			w,
-			`{"error":"failed to save job"}`,
+			"failed to save job",
 			http.StatusInternalServerError,
 		)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(newJob)
+
+	_ = json.NewEncoder(w).Encode(newJob)
 }
 
 func listJobs(w http.ResponseWriter) {
 	jobs := store.List()
 
-	json.NewEncoder(w).Encode(jobs)
+	_ = json.NewEncoder(w).Encode(jobs)
 }
 
 func GetJobHandler(w http.ResponseWriter, r *http.Request) {
@@ -94,61 +135,143 @@ func GetJobHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodGet {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		writeJSONError(
+			w,
+			"method not allowed",
+			http.StatusMethodNotAllowed,
+		)
 		return
 	}
 
-	id := path
+	id := strings.TrimSpace(path)
 
 	if id == "" {
-		http.Error(w, `{"error":"job id is required"}`, http.StatusBadRequest)
+		writeJSONError(
+			w,
+			"job id is required",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	// Validate that the supplied ID is a valid UUID.
+	if _, err := uuid.Parse(id); err != nil {
+		writeJSONError(
+			w,
+			"invalid job id",
+			http.StatusBadRequest,
+		)
 		return
 	}
 
 	existingJob, exists := store.Get(id)
 	if !exists {
-		http.Error(w, `{"error":"job not found"}`, http.StatusNotFound)
-		return
-	}
-
-	json.NewEncoder(w).Encode(existingJob)
-}
-
-func updateJobStatus(w http.ResponseWriter, r *http.Request, path string) {
-	if r.Method != http.MethodPatch {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-		return
-	}
-
-	id := strings.TrimSuffix(path, "/status")
-
-	if id == "" {
-		http.Error(w, `{"error":"job id is required"}`, http.StatusBadRequest)
-		return
-	}
-
-	var request UpdateStatusRequest
-
-	err := json.NewDecoder(r.Body).Decode(&request)
-	if err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
-		return
-	}
-
-	if request.Status == "" {
-		http.Error(w, `{"error":"status is required"}`, http.StatusBadRequest)
-		return
-	}
-
-	updatedJob, exists := store.UpdateStatus(id, request.Status)
-	if !exists {
-		http.Error(
+		writeJSONError(
 			w,
-			`{"error":"job not found or status update failed"}`,
+			"job not found",
 			http.StatusNotFound,
 		)
 		return
 	}
 
-	json.NewEncoder(w).Encode(updatedJob)
+	_ = json.NewEncoder(w).Encode(existingJob)
+}
+
+func updateJobStatus(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method != http.MethodPatch {
+		writeJSONError(
+			w,
+			"method not allowed",
+			http.StatusMethodNotAllowed,
+		)
+		return
+	}
+
+	id := strings.TrimSpace(
+		strings.TrimSuffix(path, "/status"),
+	)
+
+	if id == "" {
+		writeJSONError(
+			w,
+			"job id is required",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	if _, err := uuid.Parse(id); err != nil {
+		writeJSONError(
+			w,
+			"invalid job id",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	var request UpdateStatusRequest
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	err := decoder.Decode(&request)
+	if err != nil {
+		writeJSONError(
+			w,
+			"invalid request body",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	request.Status = strings.ToLower(
+		strings.TrimSpace(request.Status),
+	)
+
+	if request.Status == "" {
+		writeJSONError(
+			w,
+			"status is required",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	if !isValidStatus(request.Status) {
+		writeJSONError(
+			w,
+			"invalid status",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	updatedJob, exists := store.UpdateStatus(
+		id,
+		request.Status,
+	)
+
+	if !exists {
+		writeJSONError(
+			w,
+			"job not found or status update failed",
+			http.StatusNotFound,
+		)
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(updatedJob)
+}
+
+func isValidStatus(status string) bool {
+	switch status {
+	case "queued",
+		"processing",
+		"completed",
+		"failed":
+		return true
+
+	default:
+		return false
+	}
 }

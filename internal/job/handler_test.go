@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/joho/godotenv"
@@ -45,8 +46,10 @@ func deleteTestJob(t *testing.T, testStore *Store, id string) {
 	}
 }
 
-// Test 1:
-// POST /jobs
+// ----------------------------------------------------
+// Test 1: POST /jobs
+// ----------------------------------------------------
+
 func TestCreateJobHandler(t *testing.T) {
 	testStore := setupHandlerTestStore(t)
 	defer testStore.Close()
@@ -124,8 +127,10 @@ func TestCreateJobHandler(t *testing.T) {
 	}
 }
 
-// Test 2:
-// GET /jobs/{id}
+// ----------------------------------------------------
+// Test 2: GET /jobs/{id}
+// ----------------------------------------------------
+
 func TestGetJobHandler(t *testing.T) {
 	testStore := setupHandlerTestStore(t)
 	defer testStore.Close()
@@ -210,8 +215,10 @@ func TestGetJobHandler(t *testing.T) {
 	}
 }
 
-// Test 3:
-// GET /jobs
+// ----------------------------------------------------
+// Test 3: GET /jobs
+// ----------------------------------------------------
+
 func TestListJobsHandler(t *testing.T) {
 	testStore := setupHandlerTestStore(t)
 	defer testStore.Close()
@@ -294,8 +301,10 @@ func TestListJobsHandler(t *testing.T) {
 	}
 }
 
-// Test 4:
-// PATCH /jobs/{id}/status
+// ----------------------------------------------------
+// Test 4: PATCH /jobs/{id}/status
+// ----------------------------------------------------
+
 func TestUpdateJobStatusHandler(t *testing.T) {
 	testStore := setupHandlerTestStore(t)
 	defer testStore.Close()
@@ -382,7 +391,6 @@ func TestUpdateJobStatusHandler(t *testing.T) {
 		)
 	}
 
-	// Verify PostgreSQL also contains the updated status.
 	savedJob, exists := testStore.Get(createdJob.ID)
 	if !exists {
 		t.Fatal("expected updated job to exist in PostgreSQL")
@@ -392,6 +400,148 @@ func TestUpdateJobStatusHandler(t *testing.T) {
 		t.Errorf(
 			"expected persisted status completed, got %s",
 			savedJob.Status,
+		)
+	}
+}
+
+// ----------------------------------------------------
+// Validation tests
+// ----------------------------------------------------
+
+func TestCreateJobMissingType(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/jobs",
+		strings.NewReader(`{"payload":{"message":"hello"}}`),
+	)
+
+	response := httptest.NewRecorder()
+
+	JobsHandler(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Errorf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			response.Code,
+		)
+	}
+}
+
+func TestCreateJobWhitespaceType(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/jobs",
+		strings.NewReader(`{"type":"   ","payload":{}}`),
+	)
+
+	response := httptest.NewRecorder()
+
+	JobsHandler(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Errorf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			response.Code,
+		)
+	}
+}
+
+func TestCreateJobInvalidJSON(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/jobs",
+		strings.NewReader(`{"type":`),
+	)
+
+	response := httptest.NewRecorder()
+
+	JobsHandler(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Errorf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			response.Code,
+		)
+	}
+}
+
+func TestGetJobInvalidUUID(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/jobs/not-a-valid-uuid",
+		nil,
+	)
+
+	response := httptest.NewRecorder()
+
+	GetJobHandler(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Errorf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			response.Code,
+		)
+	}
+}
+
+func TestUpdateJobInvalidStatus(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	request := httptest.NewRequest(
+		http.MethodPatch,
+		"/jobs/11111111-1111-1111-1111-111111111111/status",
+		strings.NewReader(`{"status":"banana"}`),
+	)
+
+	response := httptest.NewRecorder()
+
+	GetJobHandler(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Errorf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			response.Code,
+		)
+	}
+}
+
+func TestJobsHandlerMethodNotAllowed(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	request := httptest.NewRequest(
+		http.MethodDelete,
+		"/jobs",
+		nil,
+	)
+
+	response := httptest.NewRecorder()
+
+	JobsHandler(response, request)
+
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Errorf(
+			"expected status %d, got %d",
+			http.StatusMethodNotAllowed,
+			response.Code,
 		)
 	}
 }
