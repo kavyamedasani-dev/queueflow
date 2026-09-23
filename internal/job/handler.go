@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-var store = NewStore()
+var store *Store
 
 type CreateJobRequest struct {
 	Type    string         `json:"type"`
@@ -18,6 +18,10 @@ type CreateJobRequest struct {
 
 type UpdateStatusRequest struct {
 	Status string `json:"status"`
+}
+
+func SetStore(s *Store) {
+	store = s
 }
 
 func JobsHandler(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +63,15 @@ func createJob(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:  time.Now(),
 	}
 
-	store.Save(newJob)
+	err = store.Save(newJob)
+	if err != nil {
+		http.Error(
+			w,
+			`{"error":"failed to save job"}`,
+			http.StatusInternalServerError,
+		)
+		return
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(newJob)
@@ -130,7 +142,11 @@ func updateJobStatus(w http.ResponseWriter, r *http.Request, path string) {
 
 	updatedJob, exists := store.UpdateStatus(id, request.Status)
 	if !exists {
-		http.Error(w, `{"error":"job not found"}`, http.StatusNotFound)
+		http.Error(
+			w,
+			`{"error":"job not found or status update failed"}`,
+			http.StatusNotFound,
+		)
 		return
 	}
 

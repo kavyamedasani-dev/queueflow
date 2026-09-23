@@ -1,40 +1,154 @@
 package job
 
-import "sync"
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
 
 type Store struct {
-	mu   sync.RWMutex
-	jobs map[string]Job
+	db *pgxpool.Pool
 }
 
-func NewStore() *Store {
-	return &Store{
-		jobs: make(map[string]Job),
+func NewStore(databaseURL string) (*Store, error) {
+	db, err := pgxpool.New(context.Background(), databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("unable to create database pool: %w", err)
 	}
+
+	if err := db.Ping(context.Background()); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("unable to connect to database: %w", err)
+	}
+
+	return &Store{
+		db: db,
+	}, nil
 }
 
-func (s *Store) Save(job Job) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Store) Close() {
+	s.db.Close()
+}
 
-	s.jobs[job.ID] = job
+func (s *Store) Save(job Job) error {
+	payload, err := json.Marshal(job.Payload)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.Exec(
+		context.Background(),
+		`
+		INSERT INTO jobs
+			(id, type, payload, status, retries, max_retries, created_at)
+		VALUES
+			($1, $2, $3, $4, $5, $6, $7)
+		`,
+		job.ID,
+		job.Type,
+		payload,
+		job.Status,
+		job.Retries,
+		job.MaxRetries,
+		job.CreatedAt,
+	)
+
+	return err
 }
 
 func (s *Store) Get(id string) (Job, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	var job Job
+	var payload []byte
 
-	job, exists := s.jobs[id]
-	return job, exists
+	err := s.db.QueryRow(
+		context.Background(),
+		`
+		SELECT
+			id,
+			type,
+			payload,
+			status,
+			retries,
+			max_retries,
+			created_at
+		FROM jobs
+		WHERE id = $1
+		`,
+		id,
+	).Scan(
+		&job.ID,
+		&job.Type,
+		&payload,
+		&job.Status,
+		&job.Retries,
+		&job.MaxRetries,
+		&job.CreatedAt,
+	)
+
+	if err != nil {
+		return Job{}, false
+	}
+
+	if len(payload) > 0 {
+		if err := json.Unmarshal(payload, &job.Payload); err != nil {
+			return Job{}, false
+		}
+	}
+
+	return job, true
 }
 
 func (s *Store) List() []Job {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	rows, err := s.db.Query(
+		context.Background(),
+		`
+		SELECT
+			id,
+			type,
+			payload,
+			status,
+			retries,
+			max_retries,
+			created_at
+		FROM jobs
+		ORDER BY created_at ASC
+		`,
+	)
 
-	jobs := make([]Job, 0, len(s.jobs))
+	if err != nil {
+		return []Job{}
+	}
 
-	for _, job := range s.jobs {
+	defer rows.Close()
+
+	jobs := make([]Job, 0)
+
+	for rows.Next() {
+		var job Job
+		var payload []byte
+
+		err := rows.Scan(
+			&job.ID,
+			&job.Type,
+			&payload,
+			&job.Status,
+			&job.Retries,
+			&job.MaxRetries,
+			&job.CreatedAt,
+		)
+
+		if err != nil {
+			continue
+		}
+
+		if len(payload) > 0 {
+			if err := json.Unmarshal(payload, &job.Payload); err != nil {
+				continue
+			}
+		}
+
 		jobs = append(jobs, job)
 	}
 
@@ -42,31 +156,38 @@ func (s *Store) List() []Job {
 }
 
 func (s *Store) UpdateStatus(id string, status string) (Job, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		context.Background(),
+		`
+		UPDATE jobs
+		SET status = $1
+		WHERE id = $2
+		`,
+		status,
+		id,
+	)
 
-	job, exists := s.jobs[id]
-	if !exists {
+	if err != nil {
 		return Job{}, false
 	}
 
-	job.Status = status
-	s.jobs[id] = job
-
-	return job, true
+	return s.Get(id)
 }
 
 func (s *Store) IncrementRetry(id string) (Job, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		context.Background(),
+		`
+		UPDATE jobs
+		SET retries = retries + 1
+		WHERE id = $1
+		`,
+		id,
+	)
 
-	job, exists := s.jobs[id]
-	if !exists {
+	if err != nil {
 		return Job{}, false
 	}
 
-	job.Retries++
-	s.jobs[id] = job
-
-	return job, true
+	return s.Get(id)
 }
