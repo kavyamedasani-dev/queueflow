@@ -9,19 +9,37 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type QueueStats struct {
+	Queued     int `json:"queued"`
+	Processing int `json:"processing"`
+	Completed  int `json:"completed"`
+	Failed     int `json:"failed"`
+	Total      int `json:"total"`
+}
+
 type Store struct {
 	db *pgxpool.Pool
 }
 
 func NewStore(databaseURL string) (*Store, error) {
-	db, err := pgxpool.New(context.Background(), databaseURL)
+	db, err := pgxpool.New(
+		context.Background(),
+		databaseURL,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("unable to create database pool: %w", err)
+		return nil, fmt.Errorf(
+			"unable to create database pool: %w",
+			err,
+		)
 	}
 
 	if err := db.Ping(context.Background()); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("unable to connect to database: %w", err)
+
+		return nil, fmt.Errorf(
+			"unable to connect to database: %w",
+			err,
+		)
 	}
 
 	return &Store{
@@ -105,7 +123,10 @@ func (s *Store) Get(id string) (Job, bool) {
 	}
 
 	if len(payload) > 0 {
-		if err := json.Unmarshal(payload, &job.Payload); err != nil {
+		if err := json.Unmarshal(
+			payload,
+			&job.Payload,
+		); err != nil {
 			return Job{}, false
 		}
 	}
@@ -159,7 +180,10 @@ func (s *Store) List() []Job {
 		}
 
 		if len(payload) > 0 {
-			if err := json.Unmarshal(payload, &job.Payload); err != nil {
+			if err := json.Unmarshal(
+				payload,
+				&job.Payload,
+			); err != nil {
 				continue
 			}
 		}
@@ -170,7 +194,11 @@ func (s *Store) List() []Job {
 	return jobs
 }
 
-func (s *Store) UpdateStatus(id string, status string) (Job, bool) {
+func (s *Store) UpdateStatus(
+	id string,
+	status string,
+) (Job, bool) {
+
 	result, err := s.db.Exec(
 		context.Background(),
 		`
@@ -193,7 +221,10 @@ func (s *Store) UpdateStatus(id string, status string) (Job, bool) {
 	return s.Get(id)
 }
 
-func (s *Store) IncrementRetry(id string) (Job, bool) {
+func (s *Store) IncrementRetry(
+	id string,
+) (Job, bool) {
+
 	result, err := s.db.Exec(
 		context.Background(),
 		`
@@ -215,11 +246,12 @@ func (s *Store) IncrementRetry(id string) (Job, bool) {
 	return s.Get(id)
 }
 
-// ClaimNextJob atomically finds one job that is ready to run
-// and changes its status from queued to processing.
+// ClaimNextJob atomically finds one job that is ready
+// to run and changes its status from queued to processing.
 //
-// FOR UPDATE SKIP LOCKED allows multiple workers to safely
-// request jobs at the same time without processing the same job.
+// FOR UPDATE SKIP LOCKED allows multiple workers to
+// safely request jobs at the same time without
+// processing the same job.
 func (s *Store) ClaimNextJob() (Job, bool) {
 	ctx := context.Background()
 
@@ -277,7 +309,10 @@ func (s *Store) ClaimNextJob() (Job, bool) {
 	}
 
 	if len(payload) > 0 {
-		if err := json.Unmarshal(payload, &job.Payload); err != nil {
+		if err := json.Unmarshal(
+			payload,
+			&job.Payload,
+		); err != nil {
 			return Job{}, false
 		}
 	}
@@ -303,4 +338,46 @@ func (s *Store) ClaimNextJob() (Job, bool) {
 	job.Status = "processing"
 
 	return job, true
+}
+
+// Stats returns the current number of jobs in each
+// QueueFlow status and the total number of jobs.
+func (s *Store) Stats() (QueueStats, error) {
+	var stats QueueStats
+
+	err := s.db.QueryRow(
+		context.Background(),
+		`
+		SELECT
+			COUNT(*) FILTER (
+				WHERE status = 'queued'
+			),
+			COUNT(*) FILTER (
+				WHERE status = 'processing'
+			),
+			COUNT(*) FILTER (
+				WHERE status = 'completed'
+			),
+			COUNT(*) FILTER (
+				WHERE status = 'failed'
+			),
+			COUNT(*)
+		FROM jobs
+		`,
+	).Scan(
+		&stats.Queued,
+		&stats.Processing,
+		&stats.Completed,
+		&stats.Failed,
+		&stats.Total,
+	)
+
+	if err != nil {
+		return QueueStats{}, fmt.Errorf(
+			"failed to retrieve queue stats: %w",
+			err,
+		)
+	}
+
+	return stats, nil
 }

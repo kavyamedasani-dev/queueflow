@@ -207,7 +207,7 @@ func TestStoreIncrementRetry(t *testing.T) {
 }
 
 // Test 4:
-// A job scheduled for the future must not be claimed yet.
+// A future scheduled job must not be claimed yet.
 func TestClaimNextJobSkipsFutureScheduledJob(t *testing.T) {
 	testStore := setupStoreTest(t)
 	defer testStore.Close()
@@ -261,8 +261,8 @@ func TestClaimNextJobSkipsFutureScheduledJob(t *testing.T) {
 }
 
 // Test 5:
-// Two concurrent claim attempts must not successfully claim
-// the same job twice.
+// Two concurrent claim attempts must not successfully
+// claim the same job twice.
 func TestClaimNextJobPreventsDuplicateClaim(t *testing.T) {
 	testStore := setupStoreTest(t)
 	defer testStore.Close()
@@ -309,8 +309,6 @@ func TestClaimNextJobPreventsDuplicateClaim(t *testing.T) {
 		}
 	}
 
-	// Simulate two workers attempting to claim work
-	// at approximately the same time.
 	go claim()
 	go claim()
 
@@ -320,7 +318,9 @@ func TestClaimNextJobPreventsDuplicateClaim(t *testing.T) {
 	claimCount := 0
 
 	for result := range results {
-		if result.claimed && result.job.ID == testJob.ID {
+		if result.claimed &&
+			result.job.ID == testJob.ID {
+
 			claimCount++
 		}
 	}
@@ -349,4 +349,133 @@ func TestClaimNextJobPreventsDuplicateClaim(t *testing.T) {
 		"DELETE FROM jobs WHERE id = $1",
 		testJob.ID,
 	)
+}
+
+// Test 6:
+// Stats should accurately count jobs by status.
+func TestStoreStats(t *testing.T) {
+	testStore := setupStoreTest(t)
+	defer testStore.Close()
+
+	testJobs := []Job{
+		{
+			ID:         "99999999-9999-9999-9999-999999999991",
+			Type:       "stats_test",
+			Payload:    map[string]any{"number": 1},
+			Status:     "queued",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now(),
+		},
+		{
+			ID:         "99999999-9999-9999-9999-999999999992",
+			Type:       "stats_test",
+			Payload:    map[string]any{"number": 2},
+			Status:     "processing",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now(),
+		},
+		{
+			ID:         "99999999-9999-9999-9999-999999999993",
+			Type:       "stats_test",
+			Payload:    map[string]any{"number": 3},
+			Status:     "completed",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now(),
+		},
+		{
+			ID:         "99999999-9999-9999-9999-999999999994",
+			Type:       "stats_test",
+			Payload:    map[string]any{"number": 4},
+			Status:     "failed",
+			Retries:    3,
+			MaxRetries: 3,
+			CreatedAt:  time.Now(),
+		},
+	}
+
+	for _, currentJob := range testJobs {
+		_, _ = testStore.db.Exec(
+			t.Context(),
+			"DELETE FROM jobs WHERE id = $1",
+			currentJob.ID,
+		)
+	}
+
+	// Capture the existing database counts first.
+	before, err := testStore.Stats()
+	if err != nil {
+		t.Fatalf(
+			"failed to retrieve initial queue stats: %v",
+			err,
+		)
+	}
+
+	for _, currentJob := range testJobs {
+		if err := testStore.Save(currentJob); err != nil {
+			t.Fatalf(
+				"failed to save stats test job %s: %v",
+				currentJob.ID,
+				err,
+			)
+		}
+	}
+
+	after, err := testStore.Stats()
+	if err != nil {
+		t.Fatalf(
+			"failed to retrieve queue stats: %v",
+			err,
+		)
+	}
+
+	if after.Queued != before.Queued+1 {
+		t.Fatalf(
+			"expected queued count to increase by 1, before=%d after=%d",
+			before.Queued,
+			after.Queued,
+		)
+	}
+
+	if after.Processing != before.Processing+1 {
+		t.Fatalf(
+			"expected processing count to increase by 1, before=%d after=%d",
+			before.Processing,
+			after.Processing,
+		)
+	}
+
+	if after.Completed != before.Completed+1 {
+		t.Fatalf(
+			"expected completed count to increase by 1, before=%d after=%d",
+			before.Completed,
+			after.Completed,
+		)
+	}
+
+	if after.Failed != before.Failed+1 {
+		t.Fatalf(
+			"expected failed count to increase by 1, before=%d after=%d",
+			before.Failed,
+			after.Failed,
+		)
+	}
+
+	if after.Total != before.Total+4 {
+		t.Fatalf(
+			"expected total count to increase by 4, before=%d after=%d",
+			before.Total,
+			after.Total,
+		)
+	}
+
+	for _, currentJob := range testJobs {
+		_, _ = testStore.db.Exec(
+			t.Context(),
+			"DELETE FROM jobs WHERE id = $1",
+			currentJob.ID,
+		)
+	}
 }

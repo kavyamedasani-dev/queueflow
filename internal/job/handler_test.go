@@ -545,3 +545,96 @@ func TestJobsHandlerMethodNotAllowed(t *testing.T) {
 		)
 	}
 }
+
+// ----------------------------------------------------
+// Test 5: GET /stats
+// ----------------------------------------------------
+
+func TestStatsHandler(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	// Get the expected statistics directly from the store.
+	expectedStats, err := testStore.Stats()
+	if err != nil {
+		t.Fatalf(
+			"failed to retrieve expected queue stats: %v",
+			err,
+		)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/stats",
+		nil,
+	)
+
+	response := httptest.NewRecorder()
+
+	StatsHandler(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusOK,
+			response.Code,
+		)
+	}
+
+	var returnedStats QueueStats
+
+	err = json.NewDecoder(response.Body).Decode(&returnedStats)
+	if err != nil {
+		t.Fatalf(
+			"failed to decode stats response: %v",
+			err,
+		)
+	}
+
+	if returnedStats != expectedStats {
+		t.Errorf(
+			"expected stats %+v, got %+v",
+			expectedStats,
+			returnedStats,
+		)
+	}
+
+	if returnedStats.Total !=
+		returnedStats.Queued+
+			returnedStats.Processing+
+			returnedStats.Completed+
+			returnedStats.Failed {
+
+		t.Errorf(
+			"stats total does not match status counts: %+v",
+			returnedStats,
+		)
+	}
+}
+
+// ----------------------------------------------------
+// Test 6: /stats rejects unsupported methods
+// ----------------------------------------------------
+
+func TestStatsHandlerMethodNotAllowed(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/stats",
+		nil,
+	)
+
+	response := httptest.NewRecorder()
+
+	StatsHandler(response, request)
+
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Errorf(
+			"expected status %d, got %d",
+			http.StatusMethodNotAllowed,
+			response.Code,
+		)
+	}
+}

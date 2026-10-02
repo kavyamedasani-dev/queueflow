@@ -26,16 +26,29 @@ func SetStore(s *Store) {
 }
 
 // writeJSONError sends errors consistently as JSON.
-func writeJSONError(w http.ResponseWriter, message string, status int) {
+func writeJSONError(
+	w http.ResponseWriter,
+	message string,
+	status int,
+) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"error": message,
-	})
+	_ = json.NewEncoder(w).Encode(
+		map[string]string{
+			"error": message,
+		},
+	)
 }
 
-func JobsHandler(w http.ResponseWriter, r *http.Request) {
+// JobsHandler handles:
+//
+// POST /jobs
+// GET  /jobs
+func JobsHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
 	w.Header().Set("Content-Type", "application/json")
 
 	switch r.Method {
@@ -54,7 +67,10 @@ func JobsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func createJob(w http.ResponseWriter, r *http.Request) {
+func createJob(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
 	var request CreateJobRequest
 
 	decoder := json.NewDecoder(r.Body)
@@ -126,10 +142,20 @@ func listJobs(w http.ResponseWriter) {
 	_ = json.NewEncoder(w).Encode(jobs)
 }
 
-func GetJobHandler(w http.ResponseWriter, r *http.Request) {
+// GetJobHandler handles:
+//
+// GET   /jobs/{id}
+// PATCH /jobs/{id}/status
+func GetJobHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
 	w.Header().Set("Content-Type", "application/json")
 
-	path := strings.TrimPrefix(r.URL.Path, "/jobs/")
+	path := strings.TrimPrefix(
+		r.URL.Path,
+		"/jobs/",
+	)
 
 	if strings.HasSuffix(path, "/status") {
 		updateJobStatus(w, r, path)
@@ -167,6 +193,7 @@ func GetJobHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	existingJob, exists := store.Get(id)
+
 	if !exists {
 		writeJSONError(
 			w,
@@ -179,7 +206,11 @@ func GetJobHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(existingJob)
 }
 
-func updateJobStatus(w http.ResponseWriter, r *http.Request, path string) {
+func updateJobStatus(
+	w http.ResponseWriter,
+	r *http.Request,
+	path string,
+) {
 	if r.Method != http.MethodPatch {
 		writeJSONError(
 			w,
@@ -190,7 +221,10 @@ func updateJobStatus(w http.ResponseWriter, r *http.Request, path string) {
 	}
 
 	id := strings.TrimSpace(
-		strings.TrimSuffix(path, "/status"),
+		strings.TrimSuffix(
+			path,
+			"/status",
+		),
 	)
 
 	if id == "" {
@@ -263,6 +297,43 @@ func updateJobStatus(w http.ResponseWriter, r *http.Request, path string) {
 	}
 
 	_ = json.NewEncoder(w).Encode(updatedJob)
+}
+
+// StatsHandler handles:
+//
+// GET /stats
+//
+// It returns the current number of queued,
+// processing, completed, failed, and total jobs.
+func StatsHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	w.Header().Set(
+		"Content-Type",
+		"application/json",
+	)
+
+	if r.Method != http.MethodGet {
+		writeJSONError(
+			w,
+			"method not allowed",
+			http.StatusMethodNotAllowed,
+		)
+		return
+	}
+
+	stats, err := store.Stats()
+	if err != nil {
+		writeJSONError(
+			w,
+			"failed to retrieve queue stats",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(stats)
 }
 
 func isValidStatus(status string) bool {

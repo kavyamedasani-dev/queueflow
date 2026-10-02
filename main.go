@@ -69,11 +69,13 @@ func main() {
 
 	mux := http.NewServeMux()
 
+	// Health endpoint.
 	mux.HandleFunc(
 		"/health",
 		healthHandler,
 	)
 
+	// Job endpoints.
 	mux.HandleFunc(
 		"/jobs",
 		job.JobsHandler,
@@ -82,6 +84,12 @@ func main() {
 	mux.HandleFunc(
 		"/jobs/",
 		job.GetJobHandler,
+	)
+
+	// Queue statistics endpoint.
+	mux.HandleFunc(
+		"/stats",
+		job.StatsHandler,
 	)
 
 	server := &http.Server{
@@ -116,7 +124,7 @@ func main() {
 		}
 	}()
 
-	// Wait here until QueueFlow receives a shutdown signal.
+	// Wait until QueueFlow receives a shutdown signal.
 	sig := <-shutdownSignal
 
 	log.Printf(
@@ -128,10 +136,10 @@ func main() {
 		"QueueFlow graceful shutdown started",
 	)
 
-	// Stop workers from claiming NEW jobs.
+	// Stop workers from claiming new jobs.
 	//
-	// A worker that already claimed a job is allowed
-	// to finish processing that job.
+	// Workers that already claimed jobs are allowed
+	// to finish processing them.
 	cancelWorkers()
 
 	// Stop accepting new HTTP requests and allow
