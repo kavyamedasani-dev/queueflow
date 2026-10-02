@@ -1,36 +1,87 @@
 package job
 
 import (
+	"context"
 	"log"
+	"sync"
 	"time"
 )
 
 const workerCount = 3
 
-// StartWorker starts multiple worker goroutines.
-// Each worker independently asks PostgreSQL for the next available job.
-func StartWorker() {
+// StartWorkers starts multiple worker goroutines.
+//
+// The returned WaitGroup allows main.go to wait until
+// every worker has completely stopped.
+func StartWorkers(
+	ctx context.Context,
+) *sync.WaitGroup {
+
+	var wg sync.WaitGroup
+
+	wg.Add(workerCount)
+
 	for workerID := 1; workerID <= workerCount; workerID++ {
-		go runWorker(workerID)
+		go runWorker(
+			ctx,
+			workerID,
+			&wg,
+		)
 	}
 
 	log.Printf(
 		"Started %d QueueFlow workers",
 		workerCount,
 	)
+
+	return &wg
 }
 
-// runWorker continuously looks for jobs that are ready to process.
-func runWorker(workerID int) {
+// runWorker continuously claims and processes jobs.
+//
+// When ctx is cancelled, the worker stops claiming
+// new jobs. If it is already processing a job,
+// that job is allowed to finish first.
+func runWorker(
+	ctx context.Context,
+	workerID int,
+	wg *sync.WaitGroup,
+) {
+	defer wg.Done()
+
 	for {
-		// ClaimNextJob performs an atomic database claim.
-		// FOR UPDATE SKIP LOCKED prevents two workers
-		// from claiming the same queued job.
+		// Check whether QueueFlow is shutting down
+		// before claiming another job.
+		select {
+		case <-ctx.Done():
+			log.Printf(
+				"Worker %d stopped",
+				workerID,
+			)
+			return
+
+		default:
+		}
+
 		currentJob, exists := store.ClaimNextJob()
 
 		if !exists {
-			time.Sleep(1 * time.Second)
-			continue
+			// Instead of blindly sleeping for one second,
+			// wait for either:
+			//
+			// 1. the next polling interval, or
+			// 2. a shutdown signal.
+			select {
+			case <-ctx.Done():
+				log.Printf(
+					"Worker %d stopped",
+					workerID,
+				)
+				return
+
+			case <-time.After(1 * time.Second):
+				continue
+			}
 		}
 
 		log.Printf(
@@ -40,12 +91,16 @@ func runWorker(workerID int) {
 		)
 
 		// Simulate work being performed.
+		//
+		// Once a job has been claimed, we intentionally
+		// allow it to finish even if shutdown begins.
 		time.Sleep(2 * time.Second)
 
-		// fail_job intentionally fails so retry behavior
-		// can be tested.
 		if currentJob.Type == "fail_job" {
-			handleJobFailure(workerID, currentJob)
+			handleJobFailure(
+				workerID,
+				currentJob,
+			)
 			continue
 		}
 
@@ -71,7 +126,10 @@ func runWorker(workerID int) {
 	}
 }
 
-func handleJobFailure(workerID int, currentJob Job) {
+func handleJobFailure(
+	workerID int,
+	currentJob Job,
+) {
 	if currentJob.Retries < currentJob.MaxRetries {
 		updatedJob, exists := store.IncrementRetry(
 			currentJob.ID,
