@@ -14,6 +14,7 @@ type QueueStats struct {
 	Processing int `json:"processing"`
 	Completed  int `json:"completed"`
 	Failed     int `json:"failed"`
+	Cancelled  int `json:"cancelled"`
 	Total      int `json:"total"`
 }
 
@@ -246,6 +247,34 @@ func (s *Store) IncrementRetry(
 	return s.Get(id)
 }
 
+// CancelJob safely cancels a job only while it is queued.
+//
+// The status condition is included directly in the UPDATE so
+// cancellation remains safe if a worker attempts to claim the
+// same job at approximately the same time.
+func (s *Store) CancelJob(id string) (Job, bool) {
+	result, err := s.db.Exec(
+		context.Background(),
+		`
+		UPDATE jobs
+		SET status = 'cancelled'
+		WHERE id = $1
+		  AND status = 'queued'
+		`,
+		id,
+	)
+
+	if err != nil {
+		return Job{}, false
+	}
+
+	if result.RowsAffected() == 0 {
+		return Job{}, false
+	}
+
+	return s.Get(id)
+}
+
 // ClaimNextJob atomically finds one job that is ready
 // to run and changes its status from queued to processing.
 //
@@ -361,6 +390,9 @@ func (s *Store) Stats() (QueueStats, error) {
 			COUNT(*) FILTER (
 				WHERE status = 'failed'
 			),
+			COUNT(*) FILTER (
+				WHERE status = 'cancelled'
+			),
 			COUNT(*)
 		FROM jobs
 		`,
@@ -369,6 +401,7 @@ func (s *Store) Stats() (QueueStats, error) {
 		&stats.Processing,
 		&stats.Completed,
 		&stats.Failed,
+		&stats.Cancelled,
 		&stats.Total,
 	)
 

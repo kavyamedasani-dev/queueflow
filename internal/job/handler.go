@@ -144,8 +144,9 @@ func listJobs(w http.ResponseWriter) {
 
 // GetJobHandler handles:
 //
-// GET   /jobs/{id}
-// PATCH /jobs/{id}/status
+// GET    /jobs/{id}
+// DELETE /jobs/{id}
+// PATCH  /jobs/{id}/status
 func GetJobHandler(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -162,15 +163,6 @@ func GetJobHandler(
 		return
 	}
 
-	if r.Method != http.MethodGet {
-		writeJSONError(
-			w,
-			"method not allowed",
-			http.StatusMethodNotAllowed,
-		)
-		return
-	}
-
 	id := strings.TrimSpace(path)
 
 	if id == "" {
@@ -182,7 +174,6 @@ func GetJobHandler(
 		return
 	}
 
-	// Validate that the supplied ID is a valid UUID.
 	if _, err := uuid.Parse(id); err != nil {
 		writeJSONError(
 			w,
@@ -192,6 +183,26 @@ func GetJobHandler(
 		return
 	}
 
+	switch r.Method {
+	case http.MethodGet:
+		getJob(w, id)
+
+	case http.MethodDelete:
+		cancelJob(w, id)
+
+	default:
+		writeJSONError(
+			w,
+			"method not allowed",
+			http.StatusMethodNotAllowed,
+		)
+	}
+}
+
+func getJob(
+	w http.ResponseWriter,
+	id string,
+) {
 	existingJob, exists := store.Get(id)
 
 	if !exists {
@@ -204,6 +215,50 @@ func GetJobHandler(
 	}
 
 	_ = json.NewEncoder(w).Encode(existingJob)
+}
+
+// cancelJob cancels a job only if it is still queued.
+//
+// Processing, completed, failed, and already-cancelled
+// jobs cannot be cancelled.
+func cancelJob(
+	w http.ResponseWriter,
+	id string,
+) {
+	existingJob, exists := store.Get(id)
+
+	if !exists {
+		writeJSONError(
+			w,
+			"job not found",
+			http.StatusNotFound,
+		)
+		return
+	}
+
+	if existingJob.Status != "queued" {
+		writeJSONError(
+			w,
+			"only queued jobs can be cancelled",
+			http.StatusConflict,
+		)
+		return
+	}
+
+	cancelledJob, cancelled := store.CancelJob(id)
+
+	if !cancelled {
+		// The job may have been claimed by a worker
+		// between the Get call and the cancellation attempt.
+		writeJSONError(
+			w,
+			"job could not be cancelled",
+			http.StatusConflict,
+		)
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(cancelledJob)
 }
 
 func updateJobStatus(
@@ -302,9 +357,6 @@ func updateJobStatus(
 // StatsHandler handles:
 //
 // GET /stats
-//
-// It returns the current number of queued,
-// processing, completed, failed, and total jobs.
 func StatsHandler(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -341,7 +393,8 @@ func isValidStatus(status string) bool {
 	case "queued",
 		"processing",
 		"completed",
-		"failed":
+		"failed",
+		"cancelled":
 		return true
 
 	default:

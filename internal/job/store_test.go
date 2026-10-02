@@ -295,7 +295,6 @@ func TestClaimNextJobPreventsDuplicateClaim(t *testing.T) {
 	results := make(chan claimResult, 2)
 
 	var wg sync.WaitGroup
-
 	wg.Add(2)
 
 	claim := func() {
@@ -352,7 +351,8 @@ func TestClaimNextJobPreventsDuplicateClaim(t *testing.T) {
 }
 
 // Test 6:
-// Stats should accurately count jobs by status.
+// Stats should accurately count jobs by status,
+// including cancelled jobs.
 func TestStoreStats(t *testing.T) {
 	testStore := setupStoreTest(t)
 	defer testStore.Close()
@@ -391,6 +391,15 @@ func TestStoreStats(t *testing.T) {
 			Payload:    map[string]any{"number": 4},
 			Status:     "failed",
 			Retries:    3,
+			MaxRetries: 3,
+			CreatedAt:  time.Now(),
+		},
+		{
+			ID:         "99999999-9999-9999-9999-999999999995",
+			Type:       "stats_test",
+			Payload:    map[string]any{"number": 5},
+			Status:     "cancelled",
+			Retries:    0,
 			MaxRetries: 3,
 			CreatedAt:  time.Now(),
 		},
@@ -463,9 +472,17 @@ func TestStoreStats(t *testing.T) {
 		)
 	}
 
-	if after.Total != before.Total+4 {
+	if after.Cancelled != before.Cancelled+1 {
 		t.Fatalf(
-			"expected total count to increase by 4, before=%d after=%d",
+			"expected cancelled count to increase by 1, before=%d after=%d",
+			before.Cancelled,
+			after.Cancelled,
+		)
+	}
+
+	if after.Total != before.Total+5 {
+		t.Fatalf(
+			"expected total count to increase by 5, before=%d after=%d",
 			before.Total,
 			after.Total,
 		)
@@ -477,5 +494,234 @@ func TestStoreStats(t *testing.T) {
 			"DELETE FROM jobs WHERE id = $1",
 			currentJob.ID,
 		)
+	}
+}
+
+// Test 7:
+// A queued job should be successfully cancelled.
+func TestStoreCancelQueuedJob(t *testing.T) {
+	testStore := setupStoreTest(t)
+	defer testStore.Close()
+
+	testJob := Job{
+		ID:         "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+		Type:       "cancel_test",
+		Payload:    map[string]any{"message": "cancel me"},
+		Status:     "queued",
+		Retries:    0,
+		MaxRetries: 3,
+		CreatedAt:  time.Now(),
+	}
+
+	_, _ = testStore.db.Exec(
+		t.Context(),
+		"DELETE FROM jobs WHERE id = $1",
+		testJob.ID,
+	)
+
+	defer func() {
+		_, _ = testStore.db.Exec(
+			t.Context(),
+			"DELETE FROM jobs WHERE id = $1",
+			testJob.ID,
+		)
+	}()
+
+	if err := testStore.Save(testJob); err != nil {
+		t.Fatalf(
+			"failed to save cancellation test job: %v",
+			err,
+		)
+	}
+
+	cancelledJob, cancelled := testStore.CancelJob(testJob.ID)
+
+	if !cancelled {
+		t.Fatal("expected queued job cancellation to succeed")
+	}
+
+	if cancelledJob.Status != "cancelled" {
+		t.Fatalf(
+			"expected status cancelled, got %s",
+			cancelledJob.Status,
+		)
+	}
+
+	savedJob, exists := testStore.Get(testJob.ID)
+	if !exists {
+		t.Fatal("expected cancelled job to exist")
+	}
+
+	if savedJob.Status != "cancelled" {
+		t.Fatalf(
+			"expected persisted status cancelled, got %s",
+			savedJob.Status,
+		)
+	}
+}
+
+// Test 8:
+// A processing job must not be cancelled.
+func TestStoreCannotCancelProcessingJob(t *testing.T) {
+	testStore := setupStoreTest(t)
+	defer testStore.Close()
+
+	testJob := Job{
+		ID:         "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+		Type:       "cancel_processing_test",
+		Payload:    map[string]any{"message": "already processing"},
+		Status:     "processing",
+		Retries:    0,
+		MaxRetries: 3,
+		CreatedAt:  time.Now(),
+	}
+
+	_, _ = testStore.db.Exec(
+		t.Context(),
+		"DELETE FROM jobs WHERE id = $1",
+		testJob.ID,
+	)
+
+	defer func() {
+		_, _ = testStore.db.Exec(
+			t.Context(),
+			"DELETE FROM jobs WHERE id = $1",
+			testJob.ID,
+		)
+	}()
+
+	if err := testStore.Save(testJob); err != nil {
+		t.Fatalf(
+			"failed to save processing test job: %v",
+			err,
+		)
+	}
+
+	_, cancelled := testStore.CancelJob(testJob.ID)
+
+	if cancelled {
+		t.Fatal("expected processing job cancellation to fail")
+	}
+
+	savedJob, exists := testStore.Get(testJob.ID)
+	if !exists {
+		t.Fatal("expected processing job to exist")
+	}
+
+	if savedJob.Status != "processing" {
+		t.Fatalf(
+			"expected job to remain processing, got %s",
+			savedJob.Status,
+		)
+	}
+}
+
+// Test 9:
+// Once cancelled, a job must not be claimed by a worker.
+func TestCancelledJobCannotBeClaimed(t *testing.T) {
+	testStore := setupStoreTest(t)
+	defer testStore.Close()
+
+	testJob := Job{
+		ID:         "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3",
+		Type:       "cancel_claim_test",
+		Payload:    map[string]any{"message": "do not process"},
+		Status:     "queued",
+		Retries:    0,
+		MaxRetries: 3,
+		CreatedAt:  time.Now(),
+	}
+
+	_, _ = testStore.db.Exec(
+		t.Context(),
+		"DELETE FROM jobs WHERE id = $1",
+		testJob.ID,
+	)
+
+	defer func() {
+		_, _ = testStore.db.Exec(
+			t.Context(),
+			"DELETE FROM jobs WHERE id = $1",
+			testJob.ID,
+		)
+	}()
+
+	if err := testStore.Save(testJob); err != nil {
+		t.Fatalf(
+			"failed to save claim cancellation test job: %v",
+			err,
+		)
+	}
+
+	_, cancelled := testStore.CancelJob(testJob.ID)
+	if !cancelled {
+		t.Fatal("expected job cancellation to succeed")
+	}
+
+	claimedJob, claimed := testStore.ClaimNextJob()
+
+	if claimed && claimedJob.ID == testJob.ID {
+		t.Fatal("cancelled job must not be claimed")
+	}
+
+	savedJob, exists := testStore.Get(testJob.ID)
+	if !exists {
+		t.Fatal("expected cancelled job to exist")
+	}
+
+	if savedJob.Status != "cancelled" {
+		t.Fatalf(
+			"expected cancelled job to remain cancelled, got %s",
+			savedJob.Status,
+		)
+	}
+}
+
+// Test 10:
+// Cancelling the same job twice must not succeed twice.
+func TestStoreCannotCancelJobTwice(t *testing.T) {
+	testStore := setupStoreTest(t)
+	defer testStore.Close()
+
+	testJob := Job{
+		ID:         "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa4",
+		Type:       "double_cancel_test",
+		Payload:    map[string]any{"message": "cancel once"},
+		Status:     "queued",
+		Retries:    0,
+		MaxRetries: 3,
+		CreatedAt:  time.Now(),
+	}
+
+	_, _ = testStore.db.Exec(
+		t.Context(),
+		"DELETE FROM jobs WHERE id = $1",
+		testJob.ID,
+	)
+
+	defer func() {
+		_, _ = testStore.db.Exec(
+			t.Context(),
+			"DELETE FROM jobs WHERE id = $1",
+			testJob.ID,
+		)
+	}()
+
+	if err := testStore.Save(testJob); err != nil {
+		t.Fatalf(
+			"failed to save double cancellation test job: %v",
+			err,
+		)
+	}
+
+	_, cancelled := testStore.CancelJob(testJob.ID)
+	if !cancelled {
+		t.Fatal("expected first cancellation to succeed")
+	}
+
+	_, cancelledAgain := testStore.CancelJob(testJob.ID)
+
+	if cancelledAgain {
+		t.Fatal("expected second cancellation to fail")
 	}
 }

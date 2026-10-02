@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -634,6 +635,228 @@ func TestStatsHandlerMethodNotAllowed(t *testing.T) {
 		t.Errorf(
 			"expected status %d, got %d",
 			http.StatusMethodNotAllowed,
+			response.Code,
+		)
+	}
+}
+
+// ----------------------------------------------------
+// Cancellation API tests
+// ----------------------------------------------------
+
+// A queued job should be cancelled through
+// DELETE /jobs/{id}.
+func TestDeleteJobCancelsQueuedJob(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	testJob := Job{
+		ID:         "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
+		Type:       "cancel_handler_test",
+		Payload:    map[string]any{"message": "cancel me"},
+		Status:     "queued",
+		Retries:    0,
+		MaxRetries: 3,
+		CreatedAt:  time.Now(),
+	}
+
+	_, _ = testStore.db.Exec(
+		t.Context(),
+		"DELETE FROM jobs WHERE id = $1",
+		testJob.ID,
+	)
+
+	defer func() {
+		_, _ = testStore.db.Exec(
+			t.Context(),
+			"DELETE FROM jobs WHERE id = $1",
+			testJob.ID,
+		)
+	}()
+
+	if err := testStore.Save(testJob); err != nil {
+		t.Fatalf(
+			"failed to save cancellation handler test job: %v",
+			err,
+		)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodDelete,
+		"/jobs/"+testJob.ID,
+		nil,
+	)
+
+	response := httptest.NewRecorder()
+
+	GetJobHandler(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status %d, got %d: %s",
+			http.StatusOK,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var returnedJob Job
+
+	if err := json.NewDecoder(response.Body).Decode(&returnedJob); err != nil {
+		t.Fatalf(
+			"failed to decode cancellation response: %v",
+			err,
+		)
+	}
+
+	if returnedJob.ID != testJob.ID {
+		t.Errorf(
+			"expected job ID %s, got %s",
+			testJob.ID,
+			returnedJob.ID,
+		)
+	}
+
+	if returnedJob.Status != "cancelled" {
+		t.Errorf(
+			"expected returned status cancelled, got %s",
+			returnedJob.Status,
+		)
+	}
+
+	savedJob, exists := testStore.Get(testJob.ID)
+	if !exists {
+		t.Fatal("expected cancelled job to remain in database")
+	}
+
+	if savedJob.Status != "cancelled" {
+		t.Errorf(
+			"expected persisted status cancelled, got %s",
+			savedJob.Status,
+		)
+	}
+}
+
+// A processing job cannot be cancelled.
+func TestDeleteJobRejectsProcessingJob(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	testJob := Job{
+		ID:         "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2",
+		Type:       "processing_cancel_test",
+		Payload:    map[string]any{"message": "already processing"},
+		Status:     "processing",
+		Retries:    0,
+		MaxRetries: 3,
+		CreatedAt:  time.Now(),
+	}
+
+	_, _ = testStore.db.Exec(
+		t.Context(),
+		"DELETE FROM jobs WHERE id = $1",
+		testJob.ID,
+	)
+
+	defer func() {
+		_, _ = testStore.db.Exec(
+			t.Context(),
+			"DELETE FROM jobs WHERE id = $1",
+			testJob.ID,
+		)
+	}()
+
+	if err := testStore.Save(testJob); err != nil {
+		t.Fatalf(
+			"failed to save processing cancellation test job: %v",
+			err,
+		)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodDelete,
+		"/jobs/"+testJob.ID,
+		nil,
+	)
+
+	response := httptest.NewRecorder()
+
+	GetJobHandler(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf(
+			"expected status %d, got %d: %s",
+			http.StatusConflict,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	savedJob, exists := testStore.Get(testJob.ID)
+	if !exists {
+		t.Fatal("expected processing job to remain in database")
+	}
+
+	if savedJob.Status != "processing" {
+		t.Errorf(
+			"expected status to remain processing, got %s",
+			savedJob.Status,
+		)
+	}
+}
+
+// DELETE with an invalid UUID should return 400.
+func TestDeleteJobInvalidID(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	request := httptest.NewRequest(
+		http.MethodDelete,
+		"/jobs/not-a-valid-uuid",
+		nil,
+	)
+
+	response := httptest.NewRecorder()
+
+	GetJobHandler(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Errorf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			response.Code,
+		)
+	}
+}
+
+// DELETE for a valid UUID that does not exist
+// should return 404.
+func TestDeleteJobNotFound(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	missingID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb9"
+
+	_, _ = testStore.db.Exec(
+		t.Context(),
+		"DELETE FROM jobs WHERE id = $1",
+		missingID,
+	)
+
+	request := httptest.NewRequest(
+		http.MethodDelete,
+		"/jobs/"+missingID,
+		nil,
+	)
+
+	response := httptest.NewRecorder()
+
+	GetJobHandler(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Errorf(
+			"expected status %d, got %d",
+			http.StatusNotFound,
 			response.Code,
 		)
 	}
