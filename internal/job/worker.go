@@ -5,57 +5,73 @@ import (
 	"time"
 )
 
+const workerCount = 3
+
+// StartWorker starts multiple worker goroutines.
+// Each worker independently asks PostgreSQL for the next available job.
 func StartWorker() {
-	go func() {
-		for {
-			// Atomically claim one job that is ready to run.
-			// PostgreSQL ensures multiple workers cannot claim
-			// the same queued job.
-			currentJob, exists := store.ClaimNextJob()
+	for workerID := 1; workerID <= workerCount; workerID++ {
+		go runWorker(workerID)
+	}
 
-			if !exists {
-				// No job is currently ready.
-				time.Sleep(1 * time.Second)
-				continue
-			}
-
-			log.Printf(
-				"Worker claimed job %s",
-				currentJob.ID,
-			)
-
-			// Simulate the worker doing some work.
-			time.Sleep(2 * time.Second)
-
-			// This job type intentionally fails so
-			// we can test retry behavior.
-			if currentJob.Type == "fail_job" {
-				handleJobFailure(currentJob)
-				continue
-			}
-
-			_, updated := store.UpdateStatus(
-				currentJob.ID,
-				"completed",
-			)
-
-			if !updated {
-				log.Printf(
-					"Worker failed to mark job %s as completed",
-					currentJob.ID,
-				)
-				continue
-			}
-
-			log.Printf(
-				"Worker completed job %s",
-				currentJob.ID,
-			)
-		}
-	}()
+	log.Printf(
+		"Started %d QueueFlow workers",
+		workerCount,
+	)
 }
 
-func handleJobFailure(currentJob Job) {
+// runWorker continuously looks for jobs that are ready to process.
+func runWorker(workerID int) {
+	for {
+		// ClaimNextJob performs an atomic database claim.
+		// FOR UPDATE SKIP LOCKED prevents two workers
+		// from claiming the same queued job.
+		currentJob, exists := store.ClaimNextJob()
+
+		if !exists {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		log.Printf(
+			"Worker %d claimed job %s",
+			workerID,
+			currentJob.ID,
+		)
+
+		// Simulate work being performed.
+		time.Sleep(2 * time.Second)
+
+		// fail_job intentionally fails so retry behavior
+		// can be tested.
+		if currentJob.Type == "fail_job" {
+			handleJobFailure(workerID, currentJob)
+			continue
+		}
+
+		_, updated := store.UpdateStatus(
+			currentJob.ID,
+			"completed",
+		)
+
+		if !updated {
+			log.Printf(
+				"Worker %d failed to mark job %s as completed",
+				workerID,
+				currentJob.ID,
+			)
+			continue
+		}
+
+		log.Printf(
+			"Worker %d completed job %s",
+			workerID,
+			currentJob.ID,
+		)
+	}
+}
+
+func handleJobFailure(workerID int, currentJob Job) {
 	if currentJob.Retries < currentJob.MaxRetries {
 		updatedJob, exists := store.IncrementRetry(
 			currentJob.ID,
@@ -63,7 +79,8 @@ func handleJobFailure(currentJob Job) {
 
 		if !exists {
 			log.Printf(
-				"Failed to increment retry for job %s",
+				"Worker %d failed to increment retry for job %s",
+				workerID,
 				currentJob.ID,
 			)
 			return
@@ -76,14 +93,16 @@ func handleJobFailure(currentJob Job) {
 
 		if !updated {
 			log.Printf(
-				"Failed to requeue job %s",
+				"Worker %d failed to requeue job %s",
+				workerID,
 				currentJob.ID,
 			)
 			return
 		}
 
 		log.Printf(
-			"Job %s failed. Retrying %d/%d",
+			"Worker %d: job %s failed. Retrying %d/%d",
+			workerID,
 			currentJob.ID,
 			updatedJob.Retries,
 			updatedJob.MaxRetries,
@@ -99,14 +118,16 @@ func handleJobFailure(currentJob Job) {
 
 	if !updated {
 		log.Printf(
-			"Failed to mark job %s as permanently failed",
+			"Worker %d failed to mark job %s as permanently failed",
+			workerID,
 			currentJob.ID,
 		)
 		return
 	}
 
 	log.Printf(
-		"Job %s failed permanently after %d retries",
+		"Worker %d: job %s failed permanently after %d retries",
+		workerID,
 		currentJob.ID,
 		currentJob.MaxRetries,
 	)

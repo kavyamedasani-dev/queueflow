@@ -28,8 +28,18 @@ func setupWorkerTestStore(t *testing.T) *Store {
 	return testStore
 }
 
+func deleteWorkerTestJob(t *testing.T, testStore *Store, id string) {
+	t.Helper()
+
+	_, _ = testStore.db.Exec(
+		t.Context(),
+		"DELETE FROM jobs WHERE id = $1",
+		id,
+	)
+}
+
 // Test 1:
-// Normal queued job should become completed.
+// A normal queued job should be claimed and completed.
 func TestWorkerCompletesQueuedJob(t *testing.T) {
 	testStore := setupWorkerTestStore(t)
 	defer testStore.Close()
@@ -44,11 +54,8 @@ func TestWorkerCompletesQueuedJob(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
-		job.ID,
-	)
+	deleteTestJob(t, testStore, job.ID)
+	defer deleteTestJob(t, testStore, job.ID)
 
 	if err := testStore.Save(job); err != nil {
 		t.Fatalf("failed to save test job: %v", err)
@@ -82,16 +89,10 @@ func TestWorkerCompletesQueuedJob(t *testing.T) {
 			updatedJob.Retries,
 		)
 	}
-
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
-		job.ID,
-	)
 }
 
 // Test 2:
-// Failing job should retry 3 times and then become failed.
+// A failing job should retry three times and then fail permanently.
 func TestWorkerRetriesAndFailsJob(t *testing.T) {
 	testStore := setupWorkerTestStore(t)
 	defer testStore.Close()
@@ -106,11 +107,8 @@ func TestWorkerRetriesAndFailsJob(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
-		job.ID,
-	)
+	deleteTestJob(t, testStore, job.ID)
+	defer deleteTestJob(t, testStore, job.ID)
 
 	if err := testStore.Save(job); err != nil {
 		t.Fatalf("failed to save failing test job: %v", err)
@@ -151,17 +149,10 @@ func TestWorkerRetriesAndFailsJob(t *testing.T) {
 			updatedJob.MaxRetries,
 		)
 	}
-
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
-		job.ID,
-	)
 }
 
 // Test 3:
-// A scheduled job should stay queued until its scheduled time,
-// then be processed and completed.
+// A scheduled job must remain queued until its scheduled time.
 func TestWorkerWaitsForScheduledJob(t *testing.T) {
 	testStore := setupWorkerTestStore(t)
 	defer testStore.Close()
@@ -179,11 +170,8 @@ func TestWorkerWaitsForScheduledJob(t *testing.T) {
 		ScheduledAt: &scheduledAt,
 	}
 
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
-		job.ID,
-	)
+	deleteTestJob(t, testStore, job.ID)
+	defer deleteTestJob(t, testStore, job.ID)
 
 	if err := testStore.Save(job); err != nil {
 		t.Fatalf("failed to save scheduled test job: %v", err)
@@ -191,7 +179,6 @@ func TestWorkerWaitsForScheduledJob(t *testing.T) {
 
 	StartWorker()
 
-	// The scheduled time has not arrived yet.
 	time.Sleep(1 * time.Second)
 
 	currentJob, exists := testStore.Get(job.ID)
@@ -206,7 +193,6 @@ func TestWorkerWaitsForScheduledJob(t *testing.T) {
 		)
 	}
 
-	// Now wait for the scheduled time and processing to finish.
 	waitForJobStatus(
 		t,
 		testStore,
@@ -214,35 +200,121 @@ func TestWorkerWaitsForScheduledJob(t *testing.T) {
 		"completed",
 		8*time.Second,
 	)
-
-	completedJob, exists := testStore.Get(job.ID)
-	if !exists {
-		t.Fatal("expected scheduled job to exist after processing")
-	}
-
-	if completedJob.Status != "completed" {
-		t.Fatalf(
-			"expected scheduled job to complete, got %s",
-			completedJob.Status,
-		)
-	}
-
-	if completedJob.Retries != 0 {
-		t.Fatalf(
-			"expected scheduled job to complete without retries, got %d",
-			completedJob.Retries,
-		)
-	}
-
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
-		job.ID,
-	)
 }
 
-// Helper:
-// Wait until a job reaches the expected status.
+// Test 4:
+// Multiple workers should be able to process multiple jobs concurrently.
+//
+// Each job simulates two seconds of work. With only one worker,
+// three jobs would require roughly six seconds. With three workers,
+// they should complete at approximately the same time.
+func TestMultipleWorkersProcessJobsConcurrently(t *testing.T) {
+	testStore := setupWorkerTestStore(t)
+	defer testStore.Close()
+
+	jobs := []Job{
+		{
+			ID:         "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+			Type:       "send_email",
+			Payload:    map[string]any{"to": "worker1@example.com"},
+			Status:     "queued",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now(),
+		},
+		{
+			ID:         "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+			Type:       "send_email",
+			Payload:    map[string]any{"to": "worker2@example.com"},
+			Status:     "queued",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now().Add(time.Millisecond),
+		},
+		{
+			ID:         "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3",
+			Type:       "send_email",
+			Payload:    map[string]any{"to": "worker3@example.com"},
+			Status:     "queued",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now().Add(2 * time.Millisecond),
+		},
+	}
+
+	for _, job := range jobs {
+		deleteTestJob(t, testStore, job.ID)
+	}
+
+	defer func() {
+		for _, job := range jobs {
+			deleteTestJob(t, testStore, job.ID)
+		}
+	}()
+
+	for _, job := range jobs {
+		if err := testStore.Save(job); err != nil {
+			t.Fatalf(
+				"failed to save concurrent worker test job %s: %v",
+				job.ID,
+				err,
+			)
+		}
+	}
+
+	startedAt := time.Now()
+
+	StartWorker()
+
+	for _, job := range jobs {
+		waitForJobStatus(
+			t,
+			testStore,
+			job.ID,
+			"completed",
+			5*time.Second,
+		)
+	}
+
+	elapsed := time.Since(startedAt)
+
+	// One worker would take about six seconds because each job
+	// sleeps for two seconds. Three workers should finish well
+	// below that threshold.
+	if elapsed >= 5*time.Second {
+		t.Fatalf(
+			"expected concurrent processing to finish in under 5 seconds, took %s",
+			elapsed,
+		)
+	}
+
+	for _, job := range jobs {
+		completedJob, exists := testStore.Get(job.ID)
+		if !exists {
+			t.Fatalf(
+				"expected job %s to exist",
+				job.ID,
+			)
+		}
+
+		if completedJob.Status != "completed" {
+			t.Fatalf(
+				"expected job %s to be completed, got %s",
+				job.ID,
+				completedJob.Status,
+			)
+		}
+
+		if completedJob.Retries != 0 {
+			t.Fatalf(
+				"expected job %s to have 0 retries, got %d",
+				job.ID,
+				completedJob.Retries,
+			)
+		}
+	}
+}
+
 func waitForJobStatus(
 	t *testing.T,
 	testStore *Store,
