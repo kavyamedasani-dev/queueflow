@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 )
 
@@ -1175,4 +1176,218 @@ func cleanupHandlerFilterJobs(
 			)
 		}
 	})
+}
+func TestJobsHandlerPaginationValidation(t *testing.T) {
+	tests := []struct {
+		name           string
+		query          string
+		expectedStatus int
+	}{
+		{
+			name:           "invalid limit",
+			query:          "?limit=banana",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "zero limit",
+			query:          "?limit=0",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "negative limit",
+			query:          "?limit=-5",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "limit over maximum",
+			query:          "?limit=101",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "invalid offset",
+			query:          "?offset=banana",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "negative offset",
+			query:          "?offset=-1",
+			expectedStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest(
+				http.MethodGet,
+				"/jobs"+tt.query,
+				nil,
+			)
+
+			recorder := httptest.NewRecorder()
+
+			JobsHandler(recorder, request)
+
+			if recorder.Code != tt.expectedStatus {
+				t.Fatalf(
+					"expected status %d, got %d",
+					tt.expectedStatus,
+					recorder.Code,
+				)
+			}
+
+			var response map[string]string
+
+			err := json.NewDecoder(
+				recorder.Body,
+			).Decode(&response)
+
+			if err != nil {
+				t.Fatalf(
+					"failed to decode error response: %v",
+					err,
+				)
+			}
+
+			if response["error"] == "" {
+				t.Fatal(
+					"expected error message in response",
+				)
+			}
+		})
+	}
+}
+func TestJobsHandlerPagination(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	SetStore(testStore)
+
+	// Start with a clean jobs table so this test has
+	// predictable results.
+	_, err := testStore.db.Exec(
+		context.Background(),
+		`DELETE FROM jobs`,
+	)
+	if err != nil {
+		t.Fatalf(
+			"failed to clean jobs table: %v",
+			err,
+		)
+	}
+
+	// Create five jobs in a known order.
+	for i := 1; i <= 5; i++ {
+		job := Job{
+			ID:   uuid.NewString(),
+			Type: "pagination_test",
+			Payload: map[string]any{
+				"number": i,
+			},
+			Status:     "queued",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt: time.Now().Add(
+				time.Duration(i) * time.Second,
+			),
+		}
+
+		if err := testStore.Save(job); err != nil {
+			t.Fatalf(
+				"failed to save test job %d: %v",
+				i,
+				err,
+			)
+		}
+	}
+
+	tests := []struct {
+		name            string
+		query           string
+		expectedCount   int
+		expectedNumbers []int
+	}{
+		{
+			name:            "limit two",
+			query:           "?limit=2",
+			expectedCount:   2,
+			expectedNumbers: []int{1, 2},
+		},
+		{
+			name:            "offset one",
+			query:           "?offset=1",
+			expectedCount:   4,
+			expectedNumbers: []int{2, 3, 4, 5},
+		},
+		{
+			name:            "limit two offset one",
+			query:           "?limit=2&offset=1",
+			expectedCount:   2,
+			expectedNumbers: []int{2, 3},
+		},
+		{
+			name:            "offset beyond results",
+			query:           "?offset=10",
+			expectedCount:   0,
+			expectedNumbers: []int{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest(
+				http.MethodGet,
+				"/jobs"+tt.query,
+				nil,
+			)
+
+			recorder := httptest.NewRecorder()
+
+			JobsHandler(recorder, request)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf(
+					"expected status %d, got %d",
+					http.StatusOK,
+					recorder.Code,
+				)
+			}
+
+			var jobs []Job
+
+			err := json.NewDecoder(
+				recorder.Body,
+			).Decode(&jobs)
+
+			if err != nil {
+				t.Fatalf(
+					"failed to decode response: %v",
+					err,
+				)
+			}
+
+			if len(jobs) != tt.expectedCount {
+				t.Fatalf(
+					"expected %d jobs, got %d",
+					tt.expectedCount,
+					len(jobs),
+				)
+			}
+
+			for i, expectedNumber := range tt.expectedNumbers {
+				actualNumber, ok := jobs[i].Payload["number"].(float64)
+				if !ok {
+					t.Fatalf(
+						"expected payload number for job %d",
+						i,
+					)
+				}
+
+				if int(actualNumber) != expectedNumber {
+					t.Errorf(
+						"expected job number %d, got %d",
+						expectedNumber,
+						int(actualNumber),
+					)
+				}
+			}
+		})
+	}
 }

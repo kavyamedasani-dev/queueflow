@@ -3,6 +3,7 @@ package job
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,7 +47,7 @@ func writeJSONError(
 // POST /jobs
 // GET  /jobs
 //
-// GET /jobs also supports optional query parameters:
+// GET /jobs supports optional query parameters:
 //
 // ?status=queued
 // ?status=processing
@@ -54,10 +55,12 @@ func writeJSONError(
 // ?status=failed
 // ?status=cancelled
 // ?type=email
+// ?limit=10
+// ?offset=20
 //
-// Filters can also be combined:
+// Filters and pagination can be combined:
 //
-// ?status=completed&type=email
+// ?status=completed&type=email&limit=10&offset=20
 func JobsHandler(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -149,20 +152,22 @@ func createJob(
 	_ = json.NewEncoder(w).Encode(newJob)
 }
 
-// listJobs returns all jobs or jobs matching optional
-// status and type query parameters.
+// listJobs returns jobs matching optional filters
+// and pagination query parameters.
 func listJobs(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
+	query := r.URL.Query()
+
 	status := strings.ToLower(
 		strings.TrimSpace(
-			r.URL.Query().Get("status"),
+			query.Get("status"),
 		),
 	)
 
 	jobType := strings.TrimSpace(
-		r.URL.Query().Get("type"),
+		query.Get("type"),
 	)
 
 	if status != "" && !isValidStatus(status) {
@@ -183,9 +188,77 @@ func listJobs(
 		return
 	}
 
+	limit := 0
+	offset := 0
+
+	limitValue := strings.TrimSpace(
+		query.Get("limit"),
+	)
+
+	if limitValue != "" {
+		parsedLimit, err := strconv.Atoi(limitValue)
+		if err != nil {
+			writeJSONError(
+				w,
+				"limit must be a valid integer",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		if parsedLimit <= 0 {
+			writeJSONError(
+				w,
+				"limit must be greater than zero",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		if parsedLimit > 100 {
+			writeJSONError(
+				w,
+				"limit must be 100 or fewer",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		limit = parsedLimit
+	}
+
+	offsetValue := strings.TrimSpace(
+		query.Get("offset"),
+	)
+
+	if offsetValue != "" {
+		parsedOffset, err := strconv.Atoi(offsetValue)
+		if err != nil {
+			writeJSONError(
+				w,
+				"offset must be a valid integer",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		if parsedOffset < 0 {
+			writeJSONError(
+				w,
+				"offset cannot be negative",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		offset = parsedOffset
+	}
+
 	filter := JobFilter{
 		Status: status,
 		Type:   jobType,
+		Limit:  limit,
+		Offset: offset,
 	}
 
 	jobs := store.ListFiltered(filter)
