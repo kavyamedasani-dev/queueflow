@@ -18,11 +18,13 @@ type QueueStats struct {
 	Total      int `json:"total"`
 }
 
-// JobFilter contains optional filters used when listing jobs.
-// An empty value means that filter is not applied.
+// JobFilter contains optional filters and pagination
+// settings used when listing jobs.
 type JobFilter struct {
 	Status string
 	Type   string
+	Limit  int
+	Offset int
 }
 
 type Store struct {
@@ -142,16 +144,25 @@ func (s *Store) Get(id string) (Job, bool) {
 	return job, true
 }
 
-// List returns every job without applying filters.
-// It is kept so existing code and tests continue to work.
+// List returns every job without filtering or pagination.
 func (s *Store) List() []Job {
 	return s.ListFiltered(JobFilter{})
 }
 
-// ListFiltered returns jobs matching the supplied optional filters.
+// ListFiltered returns jobs matching the supplied filters
+// and optional pagination settings.
 //
-// Status and Type can be used independently or together.
+// Limit <= 0 means no limit.
+// Offset < 0 is treated as zero.
 func (s *Store) ListFiltered(filter JobFilter) []Job {
+	if filter.Limit < 0 {
+		filter.Limit = 0
+	}
+
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
+
 	rows, err := s.db.Query(
 		context.Background(),
 		`
@@ -168,9 +179,13 @@ func (s *Store) ListFiltered(filter JobFilter) []Job {
 		WHERE ($1 = '' OR status = $1)
 		  AND ($2 = '' OR type = $2)
 		ORDER BY created_at ASC
+		LIMIT NULLIF($3, 0)
+		OFFSET $4
 		`,
 		filter.Status,
 		filter.Type,
+		filter.Limit,
+		filter.Offset,
 	)
 
 	if err != nil {
@@ -268,10 +283,6 @@ func (s *Store) IncrementRetry(
 }
 
 // CancelJob safely cancels a job only while it is queued.
-//
-// The status condition is included directly in the UPDATE so
-// cancellation remains safe if a worker attempts to claim the
-// same job at approximately the same time.
 func (s *Store) CancelJob(id string) (Job, bool) {
 	result, err := s.db.Exec(
 		context.Background(),

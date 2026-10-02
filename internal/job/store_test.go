@@ -9,6 +9,8 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// setupStoreTest creates a PostgreSQL-backed Store
+// for integration testing.
 func setupStoreTest(t *testing.T) *Store {
 	t.Helper()
 
@@ -21,10 +23,31 @@ func setupStoreTest(t *testing.T) *Store {
 
 	testStore, err := NewStore(databaseURL)
 	if err != nil {
-		t.Fatalf("failed to connect to database: %v", err)
+		t.Fatalf(
+			"failed to connect to database: %v",
+			err,
+		)
 	}
 
 	return testStore
+}
+
+// deleteTestJobs removes jobs by ID so tests can be
+// safely run multiple times.
+func deleteTestJobs(
+	t *testing.T,
+	testStore *Store,
+	ids ...string,
+) {
+	t.Helper()
+
+	for _, id := range ids {
+		_, _ = testStore.db.Exec(
+			t.Context(),
+			"DELETE FROM jobs WHERE id = $1",
+			id,
+		)
+	}
 }
 
 // Test 1:
@@ -43,17 +66,27 @@ func TestStoreSaveAndGet(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
+	deleteTestJobs(
+		t,
+		testStore,
+		testJob.ID,
+	)
+
+	defer deleteTestJobs(
+		t,
+		testStore,
 		testJob.ID,
 	)
 
 	if err := testStore.Save(testJob); err != nil {
-		t.Fatalf("failed to save job: %v", err)
+		t.Fatalf(
+			"failed to save job: %v",
+			err,
+		)
 	}
 
 	savedJob, exists := testStore.Get(testJob.ID)
+
 	if !exists {
 		t.Fatal("expected saved job to exist")
 	}
@@ -80,12 +113,6 @@ func TestStoreSaveAndGet(t *testing.T) {
 			savedJob.Status,
 		)
 	}
-
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
-		testJob.ID,
-	)
 }
 
 // Test 2:
@@ -104,14 +131,23 @@ func TestStoreUpdateStatus(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
+	deleteTestJobs(
+		t,
+		testStore,
+		testJob.ID,
+	)
+
+	defer deleteTestJobs(
+		t,
+		testStore,
 		testJob.ID,
 	)
 
 	if err := testStore.Save(testJob); err != nil {
-		t.Fatalf("failed to save test job: %v", err)
+		t.Fatalf(
+			"failed to save test job: %v",
+			err,
+		)
 	}
 
 	updatedJob, exists := testStore.UpdateStatus(
@@ -131,6 +167,7 @@ func TestStoreUpdateStatus(t *testing.T) {
 	}
 
 	savedJob, exists := testStore.Get(testJob.ID)
+
 	if !exists {
 		t.Fatal("expected updated job to exist")
 	}
@@ -141,12 +178,6 @@ func TestStoreUpdateStatus(t *testing.T) {
 			savedJob.Status,
 		)
 	}
-
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
-		testJob.ID,
-	)
 }
 
 // Test 3:
@@ -165,17 +196,29 @@ func TestStoreIncrementRetry(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
+	deleteTestJobs(
+		t,
+		testStore,
+		testJob.ID,
+	)
+
+	defer deleteTestJobs(
+		t,
+		testStore,
 		testJob.ID,
 	)
 
 	if err := testStore.Save(testJob); err != nil {
-		t.Fatalf("failed to save test job: %v", err)
+		t.Fatalf(
+			"failed to save test job: %v",
+			err,
+		)
 	}
 
-	updatedJob, exists := testStore.IncrementRetry(testJob.ID)
+	updatedJob, exists := testStore.IncrementRetry(
+		testJob.ID,
+	)
+
 	if !exists {
 		t.Fatal("expected retry increment to succeed")
 	}
@@ -188,6 +231,7 @@ func TestStoreIncrementRetry(t *testing.T) {
 	}
 
 	savedJob, exists := testStore.Get(testJob.ID)
+
 	if !exists {
 		t.Fatal("expected retry test job to exist")
 	}
@@ -198,12 +242,6 @@ func TestStoreIncrementRetry(t *testing.T) {
 			savedJob.Retries,
 		)
 	}
-
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
-		testJob.ID,
-	)
 }
 
 // Test 4:
@@ -212,7 +250,9 @@ func TestClaimNextJobSkipsFutureScheduledJob(t *testing.T) {
 	testStore := setupStoreTest(t)
 	defer testStore.Close()
 
-	scheduledAt := time.Now().Add(10 * time.Minute)
+	scheduledAt := time.Now().Add(
+		10 * time.Minute,
+	)
 
 	testJob := Job{
 		ID:          "77777777-7777-7777-7777-777777777777",
@@ -225,25 +265,39 @@ func TestClaimNextJobSkipsFutureScheduledJob(t *testing.T) {
 		ScheduledAt: &scheduledAt,
 	}
 
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
+	deleteTestJobs(
+		t,
+		testStore,
+		testJob.ID,
+	)
+
+	defer deleteTestJobs(
+		t,
+		testStore,
 		testJob.ID,
 	)
 
 	if err := testStore.Save(testJob); err != nil {
-		t.Fatalf("failed to save scheduled job: %v", err)
+		t.Fatalf(
+			"failed to save scheduled job: %v",
+			err,
+		)
 	}
 
 	claimedJob, claimed := testStore.ClaimNextJob()
 
 	if claimed && claimedJob.ID == testJob.ID {
-		t.Fatal("future scheduled job should not have been claimed")
+		t.Fatal(
+			"future scheduled job should not have been claimed",
+		)
 	}
 
 	savedJob, exists := testStore.Get(testJob.ID)
+
 	if !exists {
-		t.Fatal("expected scheduled job to exist")
+		t.Fatal(
+			"expected scheduled job to exist",
+		)
 	}
 
 	if savedJob.Status != "queued" {
@@ -252,12 +306,6 @@ func TestClaimNextJobSkipsFutureScheduledJob(t *testing.T) {
 			savedJob.Status,
 		)
 	}
-
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
-		testJob.ID,
-	)
 }
 
 // Test 5:
@@ -277,14 +325,23 @@ func TestClaimNextJobPreventsDuplicateClaim(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
+	deleteTestJobs(
+		t,
+		testStore,
+		testJob.ID,
+	)
+
+	defer deleteTestJobs(
+		t,
+		testStore,
 		testJob.ID,
 	)
 
 	if err := testStore.Save(testJob); err != nil {
-		t.Fatalf("failed to save concurrent test job: %v", err)
+		t.Fatalf(
+			"failed to save concurrent test job: %v",
+			err,
+		)
 	}
 
 	type claimResult struct {
@@ -292,15 +349,20 @@ func TestClaimNextJobPreventsDuplicateClaim(t *testing.T) {
 		claimed bool
 	}
 
-	results := make(chan claimResult, 2)
+	results := make(
+		chan claimResult,
+		2,
+	)
 
 	var wg sync.WaitGroup
+
 	wg.Add(2)
 
 	claim := func() {
 		defer wg.Done()
 
-		claimedJob, claimed := testStore.ClaimNextJob()
+		claimedJob, claimed :=
+			testStore.ClaimNextJob()
 
 		results <- claimResult{
 			job:     claimedJob,
@@ -331,9 +393,14 @@ func TestClaimNextJobPreventsDuplicateClaim(t *testing.T) {
 		)
 	}
 
-	savedJob, exists := testStore.Get(testJob.ID)
+	savedJob, exists := testStore.Get(
+		testJob.ID,
+	)
+
 	if !exists {
-		t.Fatal("expected claimed job to exist")
+		t.Fatal(
+			"expected claimed job to exist",
+		)
 	}
 
 	if savedJob.Status != "processing" {
@@ -342,12 +409,6 @@ func TestClaimNextJobPreventsDuplicateClaim(t *testing.T) {
 			savedJob.Status,
 		)
 	}
-
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
-		testJob.ID,
-	)
 }
 
 // Test 6:
@@ -405,16 +466,29 @@ func TestStoreStats(t *testing.T) {
 		},
 	}
 
+	ids := make([]string, 0, len(testJobs))
+
 	for _, currentJob := range testJobs {
-		_, _ = testStore.db.Exec(
-			t.Context(),
-			"DELETE FROM jobs WHERE id = $1",
+		ids = append(
+			ids,
 			currentJob.ID,
 		)
 	}
 
-	// Capture the existing database counts first.
+	deleteTestJobs(
+		t,
+		testStore,
+		ids...,
+	)
+
+	defer deleteTestJobs(
+		t,
+		testStore,
+		ids...,
+	)
+
 	before, err := testStore.Stats()
+
 	if err != nil {
 		t.Fatalf(
 			"failed to retrieve initial queue stats: %v",
@@ -433,6 +507,7 @@ func TestStoreStats(t *testing.T) {
 	}
 
 	after, err := testStore.Stats()
+
 	if err != nil {
 		t.Fatalf(
 			"failed to retrieve queue stats: %v",
@@ -487,14 +562,6 @@ func TestStoreStats(t *testing.T) {
 			after.Total,
 		)
 	}
-
-	for _, currentJob := range testJobs {
-		_, _ = testStore.db.Exec(
-			t.Context(),
-			"DELETE FROM jobs WHERE id = $1",
-			currentJob.ID,
-		)
-	}
 }
 
 // Test 7:
@@ -513,19 +580,17 @@ func TestStoreCancelQueuedJob(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
+	deleteTestJobs(
+		t,
+		testStore,
 		testJob.ID,
 	)
 
-	defer func() {
-		_, _ = testStore.db.Exec(
-			t.Context(),
-			"DELETE FROM jobs WHERE id = $1",
-			testJob.ID,
-		)
-	}()
+	defer deleteTestJobs(
+		t,
+		testStore,
+		testJob.ID,
+	)
 
 	if err := testStore.Save(testJob); err != nil {
 		t.Fatalf(
@@ -534,10 +599,13 @@ func TestStoreCancelQueuedJob(t *testing.T) {
 		)
 	}
 
-	cancelledJob, cancelled := testStore.CancelJob(testJob.ID)
+	cancelledJob, cancelled :=
+		testStore.CancelJob(testJob.ID)
 
 	if !cancelled {
-		t.Fatal("expected queued job cancellation to succeed")
+		t.Fatal(
+			"expected queued job cancellation to succeed",
+		)
 	}
 
 	if cancelledJob.Status != "cancelled" {
@@ -547,9 +615,14 @@ func TestStoreCancelQueuedJob(t *testing.T) {
 		)
 	}
 
-	savedJob, exists := testStore.Get(testJob.ID)
+	savedJob, exists := testStore.Get(
+		testJob.ID,
+	)
+
 	if !exists {
-		t.Fatal("expected cancelled job to exist")
+		t.Fatal(
+			"expected cancelled job to exist",
+		)
 	}
 
 	if savedJob.Status != "cancelled" {
@@ -576,19 +649,17 @@ func TestStoreCannotCancelProcessingJob(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
+	deleteTestJobs(
+		t,
+		testStore,
 		testJob.ID,
 	)
 
-	defer func() {
-		_, _ = testStore.db.Exec(
-			t.Context(),
-			"DELETE FROM jobs WHERE id = $1",
-			testJob.ID,
-		)
-	}()
+	defer deleteTestJobs(
+		t,
+		testStore,
+		testJob.ID,
+	)
 
 	if err := testStore.Save(testJob); err != nil {
 		t.Fatalf(
@@ -597,15 +668,23 @@ func TestStoreCannotCancelProcessingJob(t *testing.T) {
 		)
 	}
 
-	_, cancelled := testStore.CancelJob(testJob.ID)
+	_, cancelled :=
+		testStore.CancelJob(testJob.ID)
 
 	if cancelled {
-		t.Fatal("expected processing job cancellation to fail")
+		t.Fatal(
+			"expected processing job cancellation to fail",
+		)
 	}
 
-	savedJob, exists := testStore.Get(testJob.ID)
+	savedJob, exists := testStore.Get(
+		testJob.ID,
+	)
+
 	if !exists {
-		t.Fatal("expected processing job to exist")
+		t.Fatal(
+			"expected processing job to exist",
+		)
 	}
 
 	if savedJob.Status != "processing" {
@@ -632,19 +711,17 @@ func TestCancelledJobCannotBeClaimed(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
+	deleteTestJobs(
+		t,
+		testStore,
 		testJob.ID,
 	)
 
-	defer func() {
-		_, _ = testStore.db.Exec(
-			t.Context(),
-			"DELETE FROM jobs WHERE id = $1",
-			testJob.ID,
-		)
-	}()
+	defer deleteTestJobs(
+		t,
+		testStore,
+		testJob.ID,
+	)
 
 	if err := testStore.Save(testJob); err != nil {
 		t.Fatalf(
@@ -653,20 +730,33 @@ func TestCancelledJobCannotBeClaimed(t *testing.T) {
 		)
 	}
 
-	_, cancelled := testStore.CancelJob(testJob.ID)
+	_, cancelled :=
+		testStore.CancelJob(testJob.ID)
+
 	if !cancelled {
-		t.Fatal("expected job cancellation to succeed")
+		t.Fatal(
+			"expected job cancellation to succeed",
+		)
 	}
 
-	claimedJob, claimed := testStore.ClaimNextJob()
+	claimedJob, claimed :=
+		testStore.ClaimNextJob()
 
-	if claimed && claimedJob.ID == testJob.ID {
-		t.Fatal("cancelled job must not be claimed")
+	if claimed &&
+		claimedJob.ID == testJob.ID {
+
+		t.Fatal(
+			"cancelled job must not be claimed",
+		)
 	}
 
-	savedJob, exists := testStore.Get(testJob.ID)
+	savedJob, exists :=
+		testStore.Get(testJob.ID)
+
 	if !exists {
-		t.Fatal("expected cancelled job to exist")
+		t.Fatal(
+			"expected cancelled job to exist",
+		)
 	}
 
 	if savedJob.Status != "cancelled" {
@@ -693,19 +783,17 @@ func TestStoreCannotCancelJobTwice(t *testing.T) {
 		CreatedAt:  time.Now(),
 	}
 
-	_, _ = testStore.db.Exec(
-		t.Context(),
-		"DELETE FROM jobs WHERE id = $1",
+	deleteTestJobs(
+		t,
+		testStore,
 		testJob.ID,
 	)
 
-	defer func() {
-		_, _ = testStore.db.Exec(
-			t.Context(),
-			"DELETE FROM jobs WHERE id = $1",
-			testJob.ID,
-		)
-	}()
+	defer deleteTestJobs(
+		t,
+		testStore,
+		testJob.ID,
+	)
 
 	if err := testStore.Save(testJob); err != nil {
 		t.Fatalf(
@@ -714,25 +802,33 @@ func TestStoreCannotCancelJobTwice(t *testing.T) {
 		)
 	}
 
-	_, cancelled := testStore.CancelJob(testJob.ID)
+	_, cancelled :=
+		testStore.CancelJob(testJob.ID)
+
 	if !cancelled {
-		t.Fatal("expected first cancellation to succeed")
+		t.Fatal(
+			"expected first cancellation to succeed",
+		)
 	}
 
-	_, cancelledAgain := testStore.CancelJob(testJob.ID)
+	_, cancelledAgain :=
+		testStore.CancelJob(testJob.ID)
 
 	if cancelledAgain {
-		t.Fatal("expected second cancellation to fail")
+		t.Fatal(
+			"expected second cancellation to fail",
+		)
 	}
 }
 
 // Test 11:
-//
 // ListFiltered should correctly filter jobs by status,
 // type, both status and type, or no filters.
 func TestStoreListFiltered(t *testing.T) {
 	testStore := setupStoreTest(t)
 	defer testStore.Close()
+
+	baseTime := time.Now()
 
 	testJobs := []Job{
 		{
@@ -742,7 +838,7 @@ func TestStoreListFiltered(t *testing.T) {
 			Status:     "queued",
 			Retries:    0,
 			MaxRetries: 3,
-			CreatedAt:  time.Now(),
+			CreatedAt:  baseTime,
 		},
 		{
 			ID:         "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2",
@@ -751,7 +847,7 @@ func TestStoreListFiltered(t *testing.T) {
 			Status:     "completed",
 			Retries:    0,
 			MaxRetries: 3,
-			CreatedAt:  time.Now().Add(time.Millisecond),
+			CreatedAt:  baseTime.Add(time.Millisecond),
 		},
 		{
 			ID:         "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3",
@@ -760,7 +856,7 @@ func TestStoreListFiltered(t *testing.T) {
 			Status:     "failed",
 			Retries:    3,
 			MaxRetries: 3,
-			CreatedAt:  time.Now().Add(2 * time.Millisecond),
+			CreatedAt:  baseTime.Add(2 * time.Millisecond),
 		},
 		{
 			ID:         "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb4",
@@ -769,29 +865,30 @@ func TestStoreListFiltered(t *testing.T) {
 			Status:     "completed",
 			Retries:    0,
 			MaxRetries: 3,
-			CreatedAt:  time.Now().Add(3 * time.Millisecond),
+			CreatedAt:  baseTime.Add(3 * time.Millisecond),
 		},
 	}
 
-	// Remove leftovers from an earlier interrupted test run.
+	ids := make([]string, 0, len(testJobs))
+
 	for _, currentJob := range testJobs {
-		_, _ = testStore.db.Exec(
-			t.Context(),
-			"DELETE FROM jobs WHERE id = $1",
+		ids = append(
+			ids,
 			currentJob.ID,
 		)
 	}
 
-	// Always clean up these jobs after the test.
-	defer func() {
-		for _, currentJob := range testJobs {
-			_, _ = testStore.db.Exec(
-				t.Context(),
-				"DELETE FROM jobs WHERE id = $1",
-				currentJob.ID,
-			)
-		}
-	}()
+	deleteTestJobs(
+		t,
+		testStore,
+		ids...,
+	)
+
+	defer deleteTestJobs(
+		t,
+		testStore,
+		ids...,
+	)
 
 	for _, currentJob := range testJobs {
 		if err := testStore.Save(currentJob); err != nil {
@@ -804,9 +901,11 @@ func TestStoreListFiltered(t *testing.T) {
 	}
 
 	t.Run("filter by status", func(t *testing.T) {
-		jobs := testStore.ListFiltered(JobFilter{
-			Status: "completed",
-		})
+		jobs := testStore.ListFiltered(
+			JobFilter{
+				Status: "completed",
+			},
+		)
 
 		foundEmail := false
 		foundReport := false
@@ -836,9 +935,11 @@ func TestStoreListFiltered(t *testing.T) {
 	})
 
 	t.Run("filter by type", func(t *testing.T) {
-		jobs := testStore.ListFiltered(JobFilter{
-			Type: "email",
-		})
+		jobs := testStore.ListFiltered(
+			JobFilter{
+				Type: "email",
+			},
+		)
 
 		foundQueued := false
 		foundCompleted := false
@@ -867,43 +968,50 @@ func TestStoreListFiltered(t *testing.T) {
 		}
 	})
 
-	t.Run("filter by status and type", func(t *testing.T) {
-		jobs := testStore.ListFiltered(JobFilter{
-			Status: "completed",
-			Type:   "report",
-		})
-
-		found := false
-
-		for _, currentJob := range jobs {
-			if currentJob.Status != "completed" {
-				t.Fatalf(
-					"expected completed status, got %s",
-					currentJob.Status,
-				)
-			}
-
-			if currentJob.Type != "report" {
-				t.Fatalf(
-					"expected report type, got %s",
-					currentJob.Type,
-				)
-			}
-
-			if currentJob.ID == testJobs[3].ID {
-				found = true
-			}
-		}
-
-		if !found {
-			t.Fatal(
-				"expected completed report filtering test job",
+	t.Run(
+		"filter by status and type",
+		func(t *testing.T) {
+			jobs := testStore.ListFiltered(
+				JobFilter{
+					Status: "completed",
+					Type:   "report",
+				},
 			)
-		}
-	})
+
+			found := false
+
+			for _, currentJob := range jobs {
+				if currentJob.Status != "completed" {
+					t.Fatalf(
+						"expected completed status, got %s",
+						currentJob.Status,
+					)
+				}
+
+				if currentJob.Type != "report" {
+					t.Fatalf(
+						"expected report type, got %s",
+						currentJob.Type,
+					)
+				}
+
+				if currentJob.ID == testJobs[3].ID {
+					found = true
+				}
+			}
+
+			if !found {
+				t.Fatal(
+					"expected completed report filtering test job",
+				)
+			}
+		},
+	)
 
 	t.Run("no filters", func(t *testing.T) {
-		jobs := testStore.ListFiltered(JobFilter{})
+		jobs := testStore.ListFiltered(
+			JobFilter{},
+		)
 
 		found := make(map[string]bool)
 
@@ -924,4 +1032,197 @@ func TestStoreListFiltered(t *testing.T) {
 			}
 		}
 	})
+}
+
+// Test 12:
+// Verify limit, offset, limit+offset, and filtering
+// combined with pagination.
+func TestStoreListFilteredPagination(t *testing.T) {
+	testStore := setupStoreTest(t)
+	defer testStore.Close()
+
+	baseTime := time.Now()
+
+	jobs := []Job{
+		{
+			ID:         "cccccccc-cccc-cccc-cccc-ccccccccccc1",
+			Type:       "pagination_email",
+			Payload:    map[string]any{"number": 1},
+			Status:     "completed",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  baseTime,
+		},
+		{
+			ID:         "cccccccc-cccc-cccc-cccc-ccccccccccc2",
+			Type:       "pagination_email",
+			Payload:    map[string]any{"number": 2},
+			Status:     "completed",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  baseTime.Add(time.Second),
+		},
+		{
+			ID:         "cccccccc-cccc-cccc-cccc-ccccccccccc3",
+			Type:       "pagination_report",
+			Payload:    map[string]any{"number": 3},
+			Status:     "failed",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  baseTime.Add(2 * time.Second),
+		},
+		{
+			ID:         "cccccccc-cccc-cccc-cccc-ccccccccccc4",
+			Type:       "pagination_email",
+			Payload:    map[string]any{"number": 4},
+			Status:     "completed",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  baseTime.Add(3 * time.Second),
+		},
+	}
+
+	ids := make([]string, 0, len(jobs))
+
+	for _, currentJob := range jobs {
+		ids = append(
+			ids,
+			currentJob.ID,
+		)
+	}
+
+	deleteTestJobs(
+		t,
+		testStore,
+		ids...,
+	)
+
+	defer deleteTestJobs(
+		t,
+		testStore,
+		ids...,
+	)
+
+	for _, currentJob := range jobs {
+		if err := testStore.Save(currentJob); err != nil {
+			t.Fatalf(
+				"failed to save pagination test job %s: %v",
+				currentJob.ID,
+				err,
+			)
+		}
+	}
+
+	t.Run("limit only", func(t *testing.T) {
+		result := testStore.ListFiltered(
+			JobFilter{
+				Type:  "pagination_email",
+				Limit: 2,
+			},
+		)
+
+		if len(result) != 2 {
+			t.Fatalf(
+				"expected 2 jobs, got %d",
+				len(result),
+			)
+		}
+
+		if result[0].ID != jobs[0].ID {
+			t.Errorf(
+				"expected first job %s, got %s",
+				jobs[0].ID,
+				result[0].ID,
+			)
+		}
+
+		if result[1].ID != jobs[1].ID {
+			t.Errorf(
+				"expected second job %s, got %s",
+				jobs[1].ID,
+				result[1].ID,
+			)
+		}
+	})
+
+	t.Run("offset only", func(t *testing.T) {
+		result := testStore.ListFiltered(
+			JobFilter{
+				Type:   "pagination_email",
+				Offset: 2,
+			},
+		)
+
+		if len(result) != 1 {
+			t.Fatalf(
+				"expected 1 job after offset, got %d",
+				len(result),
+			)
+		}
+
+		if result[0].ID != jobs[3].ID {
+			t.Errorf(
+				"expected job %s, got %s",
+				jobs[3].ID,
+				result[0].ID,
+			)
+		}
+	})
+
+	t.Run(
+		"limit and offset",
+		func(t *testing.T) {
+			result := testStore.ListFiltered(
+				JobFilter{
+					Type:   "pagination_email",
+					Limit:  1,
+					Offset: 1,
+				},
+			)
+
+			if len(result) != 1 {
+				t.Fatalf(
+					"expected 1 job, got %d",
+					len(result),
+				)
+			}
+
+			if result[0].ID != jobs[1].ID {
+				t.Errorf(
+					"expected job %s, got %s",
+					jobs[1].ID,
+					result[0].ID,
+				)
+			}
+		},
+	)
+
+	t.Run(
+		"filter and pagination together",
+		func(t *testing.T) {
+			result := testStore.ListFiltered(
+				JobFilter{
+					Status: "completed",
+					Type:   "pagination_email",
+					Limit:  1,
+					Offset: 1,
+				},
+			)
+
+			if len(result) != 1 {
+				t.Fatalf(
+					"expected 1 job, got %d",
+					len(result),
+				)
+			}
+
+			if result[0].ID != jobs[1].ID {
+				t.Errorf(
+					"expected job %s, got %s",
+					jobs[1].ID,
+					result[0].ID,
+				)
+			}
+		},
+	)
 }
