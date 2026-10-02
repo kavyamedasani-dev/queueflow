@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -170,7 +171,7 @@ func (s *Store) List() []Job {
 }
 
 func (s *Store) UpdateStatus(id string, status string) (Job, bool) {
-	_, err := s.db.Exec(
+	result, err := s.db.Exec(
 		context.Background(),
 		`
 		UPDATE jobs
@@ -185,11 +186,15 @@ func (s *Store) UpdateStatus(id string, status string) (Job, bool) {
 		return Job{}, false
 	}
 
+	if result.RowsAffected() == 0 {
+		return Job{}, false
+	}
+
 	return s.Get(id)
 }
 
 func (s *Store) IncrementRetry(id string) (Job, bool) {
-	_, err := s.db.Exec(
+	result, err := s.db.Exec(
 		context.Background(),
 		`
 		UPDATE jobs
@@ -203,5 +208,99 @@ func (s *Store) IncrementRetry(id string) (Job, bool) {
 		return Job{}, false
 	}
 
+	if result.RowsAffected() == 0 {
+		return Job{}, false
+	}
+
 	return s.Get(id)
+}
+
+// ClaimNextJob atomically finds one job that is ready to run
+// and changes its status from queued to processing.
+//
+// FOR UPDATE SKIP LOCKED allows multiple workers to safely
+// request jobs at the same time without processing the same job.
+func (s *Store) ClaimNextJob() (Job, bool) {
+	ctx := context.Background()
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Job{}, false
+	}
+
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	var job Job
+	var payload []byte
+
+	err = tx.QueryRow(
+		ctx,
+		`
+		SELECT
+			id,
+			type,
+			payload,
+			status,
+			retries,
+			max_retries,
+			created_at,
+			scheduled_at
+		FROM jobs
+		WHERE status = 'queued'
+		  AND (
+				scheduled_at IS NULL
+				OR scheduled_at <= NOW()
+		  )
+		ORDER BY created_at ASC
+		FOR UPDATE SKIP LOCKED
+		LIMIT 1
+		`,
+	).Scan(
+		&job.ID,
+		&job.Type,
+		&payload,
+		&job.Status,
+		&job.Retries,
+		&job.MaxRetries,
+		&job.CreatedAt,
+		&job.ScheduledAt,
+	)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return Job{}, false
+		}
+
+		return Job{}, false
+	}
+
+	if len(payload) > 0 {
+		if err := json.Unmarshal(payload, &job.Payload); err != nil {
+			return Job{}, false
+		}
+	}
+
+	_, err = tx.Exec(
+		ctx,
+		`
+		UPDATE jobs
+		SET status = 'processing'
+		WHERE id = $1
+		`,
+		job.ID,
+	)
+
+	if err != nil {
+		return Job{}, false
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Job{}, false
+	}
+
+	job.Status = "processing"
+
+	return job, true
 }
