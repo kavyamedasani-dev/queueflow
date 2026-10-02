@@ -42,9 +42,18 @@ func (s *Store) Save(job Job) error {
 		context.Background(),
 		`
 		INSERT INTO jobs
-			(id, type, payload, status, retries, max_retries, created_at)
+			(
+				id,
+				type,
+				payload,
+				status,
+				retries,
+				max_retries,
+				created_at,
+				scheduled_at
+			)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7)
+			($1, $2, $3, $4, $5, $6, $7, $8)
 		`,
 		job.ID,
 		job.Type,
@@ -53,6 +62,7 @@ func (s *Store) Save(job Job) error {
 		job.Retries,
 		job.MaxRetries,
 		job.CreatedAt,
+		job.ScheduledAt,
 	)
 
 	return err
@@ -72,7 +82,8 @@ func (s *Store) Get(id string) (Job, bool) {
 			status,
 			retries,
 			max_retries,
-			created_at
+			created_at,
+			scheduled_at
 		FROM jobs
 		WHERE id = $1
 		`,
@@ -85,6 +96,7 @@ func (s *Store) Get(id string) (Job, bool) {
 		&job.Retries,
 		&job.MaxRetries,
 		&job.CreatedAt,
+		&job.ScheduledAt,
 	)
 
 	if err != nil {
@@ -111,7 +123,8 @@ func (s *Store) List() []Job {
 			status,
 			retries,
 			max_retries,
-			created_at
+			created_at,
+			scheduled_at
 		FROM jobs
 		ORDER BY created_at ASC
 		`,
@@ -137,6 +150,7 @@ func (s *Store) List() []Job {
 			&job.Retries,
 			&job.MaxRetries,
 			&job.CreatedAt,
+			&job.ScheduledAt,
 		)
 
 		if err != nil {

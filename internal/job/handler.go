@@ -12,8 +12,9 @@ import (
 var store *Store
 
 type CreateJobRequest struct {
-	Type    string         `json:"type"`
-	Payload map[string]any `json:"payload"`
+	Type        string         `json:"type"`
+	Payload     map[string]any `json:"payload"`
+	ScheduledAt *time.Time     `json:"scheduled_at,omitempty"`
 }
 
 type UpdateStatusRequest struct {
@@ -94,13 +95,14 @@ func createJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newJob := Job{
-		ID:         uuid.NewString(),
-		Type:       request.Type,
-		Payload:    request.Payload,
-		Status:     "queued",
-		Retries:    0,
-		MaxRetries: 3,
-		CreatedAt:  time.Now(),
+		ID:          uuid.NewString(),
+		Type:        request.Type,
+		Payload:     request.Payload,
+		Status:      "queued",
+		Retries:     0,
+		MaxRetries:  3,
+		CreatedAt:   time.Now(),
+		ScheduledAt: request.ScheduledAt,
 	}
 
 	err = store.Save(newJob)
