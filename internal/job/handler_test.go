@@ -2,6 +2,7 @@ package job
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -860,4 +861,318 @@ func TestDeleteJobNotFound(t *testing.T) {
 			response.Code,
 		)
 	}
+}
+
+// ----------------------------------------------------
+// Job filtering API tests
+// ----------------------------------------------------
+
+// GET /jobs?status=completed should return only
+// jobs whose status is completed.
+func TestListJobsFilterByStatus(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	testJobs := []Job{
+		{
+			ID:         "cccccccc-cccc-cccc-cccc-ccccccccccc1",
+			Type:       "email",
+			Payload:    map[string]any{"message": "completed email"},
+			Status:     "completed",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now(),
+		},
+		{
+			ID:         "cccccccc-cccc-cccc-cccc-ccccccccccc2",
+			Type:       "report",
+			Payload:    map[string]any{"message": "failed report"},
+			Status:     "failed",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now().Add(time.Millisecond),
+		},
+	}
+
+	cleanupHandlerFilterJobs(t, testStore, testJobs)
+
+	for _, testJob := range testJobs {
+		if err := testStore.Save(testJob); err != nil {
+			t.Fatalf("failed to save test job: %v", err)
+		}
+	}
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/jobs?status=completed",
+		nil,
+	)
+
+	response := httptest.NewRecorder()
+
+	JobsHandler(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status %d, got %d: %s",
+			http.StatusOK,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var jobs []Job
+
+	if err := json.NewDecoder(response.Body).Decode(&jobs); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	foundTestJob := false
+
+	for _, currentJob := range jobs {
+		if currentJob.Status != "completed" {
+			t.Fatalf(
+				"expected only completed jobs, got %s",
+				currentJob.Status,
+			)
+		}
+
+		if currentJob.ID == testJobs[0].ID {
+			foundTestJob = true
+		}
+	}
+
+	if !foundTestJob {
+		t.Fatal("expected completed filtering test job")
+	}
+}
+
+// GET /jobs?type=email should return only email jobs.
+func TestListJobsFilterByType(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	testJobs := []Job{
+		{
+			ID:         "cccccccc-cccc-cccc-cccc-ccccccccccc3",
+			Type:       "email",
+			Payload:    map[string]any{"message": "email job"},
+			Status:     "completed",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now(),
+		},
+		{
+			ID:         "cccccccc-cccc-cccc-cccc-ccccccccccc4",
+			Type:       "report",
+			Payload:    map[string]any{"message": "report job"},
+			Status:     "completed",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now().Add(time.Millisecond),
+		},
+	}
+
+	cleanupHandlerFilterJobs(t, testStore, testJobs)
+
+	for _, testJob := range testJobs {
+		if err := testStore.Save(testJob); err != nil {
+			t.Fatalf("failed to save test job: %v", err)
+		}
+	}
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/jobs?type=email",
+		nil,
+	)
+
+	response := httptest.NewRecorder()
+
+	JobsHandler(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status %d, got %d: %s",
+			http.StatusOK,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var jobs []Job
+
+	if err := json.NewDecoder(response.Body).Decode(&jobs); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	foundTestJob := false
+
+	for _, currentJob := range jobs {
+		if currentJob.Type != "email" {
+			t.Fatalf(
+				"expected only email jobs, got %s",
+				currentJob.Type,
+			)
+		}
+
+		if currentJob.ID == testJobs[0].ID {
+			foundTestJob = true
+		}
+	}
+
+	if !foundTestJob {
+		t.Fatal("expected email filtering test job")
+	}
+}
+
+// GET /jobs?status=completed&type=email should apply
+// both filters at the same time.
+func TestListJobsFilterByStatusAndType(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	testJobs := []Job{
+		{
+			ID:         "cccccccc-cccc-cccc-cccc-ccccccccccc5",
+			Type:       "email",
+			Payload:    map[string]any{"message": "completed email"},
+			Status:     "completed",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now(),
+		},
+		{
+			ID:         "cccccccc-cccc-cccc-cccc-ccccccccccc6",
+			Type:       "email",
+			Payload:    map[string]any{"message": "failed email"},
+			Status:     "failed",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now().Add(time.Millisecond),
+		},
+		{
+			ID:         "cccccccc-cccc-cccc-cccc-ccccccccccc7",
+			Type:       "report",
+			Payload:    map[string]any{"message": "completed report"},
+			Status:     "completed",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now().Add(2 * time.Millisecond),
+		},
+	}
+
+	cleanupHandlerFilterJobs(t, testStore, testJobs)
+
+	for _, testJob := range testJobs {
+		if err := testStore.Save(testJob); err != nil {
+			t.Fatalf("failed to save test job: %v", err)
+		}
+	}
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/jobs?status=completed&type=email",
+		nil,
+	)
+
+	response := httptest.NewRecorder()
+
+	JobsHandler(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status %d, got %d: %s",
+			http.StatusOK,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var jobs []Job
+
+	if err := json.NewDecoder(response.Body).Decode(&jobs); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	foundTestJob := false
+
+	for _, currentJob := range jobs {
+		if currentJob.Status != "completed" {
+			t.Fatalf(
+				"expected completed status, got %s",
+				currentJob.Status,
+			)
+		}
+
+		if currentJob.Type != "email" {
+			t.Fatalf(
+				"expected email type, got %s",
+				currentJob.Type,
+			)
+		}
+
+		if currentJob.ID == testJobs[0].ID {
+			foundTestJob = true
+		}
+	}
+
+	if !foundTestJob {
+		t.Fatal(
+			"expected completed email filtering test job",
+		)
+	}
+}
+
+// An unsupported status filter should return 400.
+func TestListJobsRejectsInvalidStatusFilter(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/jobs?status=banana",
+		nil,
+	)
+
+	response := httptest.NewRecorder()
+
+	JobsHandler(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d: %s",
+			http.StatusBadRequest,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+}
+
+// cleanupHandlerFilterJobs removes filtering-test records
+// before and after each test.
+func cleanupHandlerFilterJobs(
+	t *testing.T,
+	testStore *Store,
+	jobs []Job,
+) {
+	t.Helper()
+
+	for _, testJob := range jobs {
+		_, _ = testStore.db.Exec(
+			t.Context(),
+			"DELETE FROM jobs WHERE id = $1",
+			testJob.ID,
+		)
+	}
+
+	t.Cleanup(func() {
+		for _, testJob := range jobs {
+			_, _ = testStore.db.Exec(
+				context.Background(),
+				"DELETE FROM jobs WHERE id = $1",
+				testJob.ID,
+			)
+		}
+	})
 }

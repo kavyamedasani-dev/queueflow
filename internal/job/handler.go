@@ -45,6 +45,19 @@ func writeJSONError(
 //
 // POST /jobs
 // GET  /jobs
+//
+// GET /jobs also supports optional query parameters:
+//
+// ?status=queued
+// ?status=processing
+// ?status=completed
+// ?status=failed
+// ?status=cancelled
+// ?type=email
+//
+// Filters can also be combined:
+//
+// ?status=completed&type=email
 func JobsHandler(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -56,7 +69,7 @@ func JobsHandler(
 		createJob(w, r)
 
 	case http.MethodGet:
-		listJobs(w)
+		listJobs(w, r)
 
 	default:
 		writeJSONError(
@@ -136,8 +149,46 @@ func createJob(
 	_ = json.NewEncoder(w).Encode(newJob)
 }
 
-func listJobs(w http.ResponseWriter) {
-	jobs := store.List()
+// listJobs returns all jobs or jobs matching optional
+// status and type query parameters.
+func listJobs(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	status := strings.ToLower(
+		strings.TrimSpace(
+			r.URL.Query().Get("status"),
+		),
+	)
+
+	jobType := strings.TrimSpace(
+		r.URL.Query().Get("type"),
+	)
+
+	if status != "" && !isValidStatus(status) {
+		writeJSONError(
+			w,
+			"invalid status filter",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	if len(jobType) > 100 {
+		writeJSONError(
+			w,
+			"type filter must be 100 characters or fewer",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	filter := JobFilter{
+		Status: status,
+		Type:   jobType,
+	}
+
+	jobs := store.ListFiltered(filter)
 
 	_ = json.NewEncoder(w).Encode(jobs)
 }

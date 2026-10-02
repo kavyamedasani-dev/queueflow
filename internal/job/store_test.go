@@ -725,3 +725,203 @@ func TestStoreCannotCancelJobTwice(t *testing.T) {
 		t.Fatal("expected second cancellation to fail")
 	}
 }
+
+// Test 11:
+//
+// ListFiltered should correctly filter jobs by status,
+// type, both status and type, or no filters.
+func TestStoreListFiltered(t *testing.T) {
+	testStore := setupStoreTest(t)
+	defer testStore.Close()
+
+	testJobs := []Job{
+		{
+			ID:         "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
+			Type:       "email",
+			Payload:    map[string]any{"message": "queued email"},
+			Status:     "queued",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now(),
+		},
+		{
+			ID:         "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2",
+			Type:       "email",
+			Payload:    map[string]any{"message": "completed email"},
+			Status:     "completed",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now().Add(time.Millisecond),
+		},
+		{
+			ID:         "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3",
+			Type:       "report",
+			Payload:    map[string]any{"message": "failed report"},
+			Status:     "failed",
+			Retries:    3,
+			MaxRetries: 3,
+			CreatedAt:  time.Now().Add(2 * time.Millisecond),
+		},
+		{
+			ID:         "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb4",
+			Type:       "report",
+			Payload:    map[string]any{"message": "completed report"},
+			Status:     "completed",
+			Retries:    0,
+			MaxRetries: 3,
+			CreatedAt:  time.Now().Add(3 * time.Millisecond),
+		},
+	}
+
+	// Remove leftovers from an earlier interrupted test run.
+	for _, currentJob := range testJobs {
+		_, _ = testStore.db.Exec(
+			t.Context(),
+			"DELETE FROM jobs WHERE id = $1",
+			currentJob.ID,
+		)
+	}
+
+	// Always clean up these jobs after the test.
+	defer func() {
+		for _, currentJob := range testJobs {
+			_, _ = testStore.db.Exec(
+				t.Context(),
+				"DELETE FROM jobs WHERE id = $1",
+				currentJob.ID,
+			)
+		}
+	}()
+
+	for _, currentJob := range testJobs {
+		if err := testStore.Save(currentJob); err != nil {
+			t.Fatalf(
+				"failed to save filtering test job %s: %v",
+				currentJob.ID,
+				err,
+			)
+		}
+	}
+
+	t.Run("filter by status", func(t *testing.T) {
+		jobs := testStore.ListFiltered(JobFilter{
+			Status: "completed",
+		})
+
+		foundEmail := false
+		foundReport := false
+
+		for _, currentJob := range jobs {
+			if currentJob.Status != "completed" {
+				t.Fatalf(
+					"expected only completed jobs, got status %s",
+					currentJob.Status,
+				)
+			}
+
+			if currentJob.ID == testJobs[1].ID {
+				foundEmail = true
+			}
+
+			if currentJob.ID == testJobs[3].ID {
+				foundReport = true
+			}
+		}
+
+		if !foundEmail || !foundReport {
+			t.Fatal(
+				"expected both filtering test completed jobs to be returned",
+			)
+		}
+	})
+
+	t.Run("filter by type", func(t *testing.T) {
+		jobs := testStore.ListFiltered(JobFilter{
+			Type: "email",
+		})
+
+		foundQueued := false
+		foundCompleted := false
+
+		for _, currentJob := range jobs {
+			if currentJob.Type != "email" {
+				t.Fatalf(
+					"expected only email jobs, got type %s",
+					currentJob.Type,
+				)
+			}
+
+			if currentJob.ID == testJobs[0].ID {
+				foundQueued = true
+			}
+
+			if currentJob.ID == testJobs[1].ID {
+				foundCompleted = true
+			}
+		}
+
+		if !foundQueued || !foundCompleted {
+			t.Fatal(
+				"expected both filtering test email jobs to be returned",
+			)
+		}
+	})
+
+	t.Run("filter by status and type", func(t *testing.T) {
+		jobs := testStore.ListFiltered(JobFilter{
+			Status: "completed",
+			Type:   "report",
+		})
+
+		found := false
+
+		for _, currentJob := range jobs {
+			if currentJob.Status != "completed" {
+				t.Fatalf(
+					"expected completed status, got %s",
+					currentJob.Status,
+				)
+			}
+
+			if currentJob.Type != "report" {
+				t.Fatalf(
+					"expected report type, got %s",
+					currentJob.Type,
+				)
+			}
+
+			if currentJob.ID == testJobs[3].ID {
+				found = true
+			}
+		}
+
+		if !found {
+			t.Fatal(
+				"expected completed report filtering test job",
+			)
+		}
+	})
+
+	t.Run("no filters", func(t *testing.T) {
+		jobs := testStore.ListFiltered(JobFilter{})
+
+		found := make(map[string]bool)
+
+		for _, currentJob := range jobs {
+			for _, testJob := range testJobs {
+				if currentJob.ID == testJob.ID {
+					found[currentJob.ID] = true
+				}
+			}
+		}
+
+		for _, testJob := range testJobs {
+			if !found[testJob.ID] {
+				t.Fatalf(
+					"expected job %s when no filters are applied",
+					testJob.ID,
+				)
+			}
+		}
+	})
+}

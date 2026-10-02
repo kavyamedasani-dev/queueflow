@@ -18,6 +18,13 @@ type QueueStats struct {
 	Total      int `json:"total"`
 }
 
+// JobFilter contains optional filters used when listing jobs.
+// An empty value means that filter is not applied.
+type JobFilter struct {
+	Status string
+	Type   string
+}
+
 type Store struct {
 	db *pgxpool.Pool
 }
@@ -135,7 +142,16 @@ func (s *Store) Get(id string) (Job, bool) {
 	return job, true
 }
 
+// List returns every job without applying filters.
+// It is kept so existing code and tests continue to work.
 func (s *Store) List() []Job {
+	return s.ListFiltered(JobFilter{})
+}
+
+// ListFiltered returns jobs matching the supplied optional filters.
+//
+// Status and Type can be used independently or together.
+func (s *Store) ListFiltered(filter JobFilter) []Job {
 	rows, err := s.db.Query(
 		context.Background(),
 		`
@@ -149,8 +165,12 @@ func (s *Store) List() []Job {
 			created_at,
 			scheduled_at
 		FROM jobs
+		WHERE ($1 = '' OR status = $1)
+		  AND ($2 = '' OR type = $2)
 		ORDER BY created_at ASC
 		`,
+		filter.Status,
+		filter.Type,
 	)
 
 	if err != nil {
