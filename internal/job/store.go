@@ -62,6 +62,10 @@ func (s *Store) Close() {
 }
 
 func (s *Store) Save(job Job) error {
+	if job.Priority == "" {
+		job.Priority = "normal"
+	}
+
 	payload, err := json.Marshal(job.Payload)
 	if err != nil {
 		return err
@@ -76,18 +80,20 @@ func (s *Store) Save(job Job) error {
 				type,
 				payload,
 				status,
+				priority,
 				retries,
 				max_retries,
 				created_at,
 				scheduled_at
 			)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7, $8)
+			($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		`,
 		job.ID,
 		job.Type,
 		payload,
 		job.Status,
+		job.Priority,
 		job.Retries,
 		job.MaxRetries,
 		job.CreatedAt,
@@ -109,6 +115,7 @@ func (s *Store) Get(id string) (Job, bool) {
 			type,
 			payload,
 			status,
+			priority,
 			retries,
 			max_retries,
 			created_at,
@@ -122,6 +129,7 @@ func (s *Store) Get(id string) (Job, bool) {
 		&job.Type,
 		&payload,
 		&job.Status,
+		&job.Priority,
 		&job.Retries,
 		&job.MaxRetries,
 		&job.CreatedAt,
@@ -171,6 +179,7 @@ func (s *Store) ListFiltered(filter JobFilter) []Job {
 			type,
 			payload,
 			status,
+			priority,
 			retries,
 			max_retries,
 			created_at,
@@ -205,6 +214,7 @@ func (s *Store) ListFiltered(filter JobFilter) []Job {
 			&job.Type,
 			&payload,
 			&job.Status,
+			&job.Priority,
 			&job.Retries,
 			&job.MaxRetries,
 			&job.CreatedAt,
@@ -309,6 +319,13 @@ func (s *Store) CancelJob(id string) (Job, bool) {
 // ClaimNextJob atomically finds one job that is ready
 // to run and changes its status from queued to processing.
 //
+// Jobs are claimed by priority:
+//
+// high -> normal -> low
+//
+// Jobs with the same priority are processed in
+// creation order.
+//
 // FOR UPDATE SKIP LOCKED allows multiple workers to
 // safely request jobs at the same time without
 // processing the same job.
@@ -335,6 +352,7 @@ func (s *Store) ClaimNextJob() (Job, bool) {
 			type,
 			payload,
 			status,
+			priority,
 			retries,
 			max_retries,
 			created_at,
@@ -345,7 +363,14 @@ func (s *Store) ClaimNextJob() (Job, bool) {
 				scheduled_at IS NULL
 				OR scheduled_at <= NOW()
 		  )
-		ORDER BY created_at ASC
+		ORDER BY
+			CASE priority
+				WHEN 'high' THEN 1
+				WHEN 'normal' THEN 2
+				WHEN 'low' THEN 3
+				ELSE 4
+			END ASC,
+			created_at ASC
 		FOR UPDATE SKIP LOCKED
 		LIMIT 1
 		`,
@@ -354,6 +379,7 @@ func (s *Store) ClaimNextJob() (Job, bool) {
 		&job.Type,
 		&payload,
 		&job.Status,
+		&job.Priority,
 		&job.Retries,
 		&job.MaxRetries,
 		&job.CreatedAt,

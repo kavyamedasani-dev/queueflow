@@ -1226,3 +1226,144 @@ func TestStoreListFilteredPagination(t *testing.T) {
 		},
 	)
 }
+
+// Test 13:
+//
+// Higher-priority queued jobs should be claimed before
+// normal- and low-priority jobs, regardless of creation order.
+func TestClaimNextJobRespectsPriority(t *testing.T) {
+	testStore := setupStoreTest(t)
+	defer testStore.Close()
+
+	baseTime := time.Now()
+
+	lowJob := Job{
+		ID:         "dddddddd-dddd-dddd-dddd-ddddddddddd1",
+		Type:       "priority_test",
+		Payload:    map[string]any{"priority": "low"},
+		Status:     "queued",
+		Priority:   "low",
+		Retries:    0,
+		MaxRetries: 3,
+		CreatedAt:  baseTime,
+	}
+
+	normalJob := Job{
+		ID:         "dddddddd-dddd-dddd-dddd-ddddddddddd2",
+		Type:       "priority_test",
+		Payload:    map[string]any{"priority": "normal"},
+		Status:     "queued",
+		Priority:   "normal",
+		Retries:    0,
+		MaxRetries: 3,
+		CreatedAt:  baseTime.Add(time.Second),
+	}
+
+	highJob := Job{
+		ID:         "dddddddd-dddd-dddd-dddd-ddddddddddd3",
+		Type:       "priority_test",
+		Payload:    map[string]any{"priority": "high"},
+		Status:     "queued",
+		Priority:   "high",
+		Retries:    0,
+		MaxRetries: 3,
+		CreatedAt:  baseTime.Add(2 * time.Second),
+	}
+
+	deleteTestJobs(
+		t,
+		testStore,
+		lowJob.ID,
+		normalJob.ID,
+		highJob.ID,
+	)
+
+	defer deleteTestJobs(
+		t,
+		testStore,
+		lowJob.ID,
+		normalJob.ID,
+		highJob.ID,
+	)
+
+	if err := testStore.Save(lowJob); err != nil {
+		t.Fatalf(
+			"failed to save low-priority job: %v",
+			err,
+		)
+	}
+
+	if err := testStore.Save(normalJob); err != nil {
+		t.Fatalf(
+			"failed to save normal-priority job: %v",
+			err,
+		)
+	}
+
+	if err := testStore.Save(highJob); err != nil {
+		t.Fatalf(
+			"failed to save high-priority job: %v",
+			err,
+		)
+	}
+
+	firstClaimed, claimed := testStore.ClaimNextJob()
+	if !claimed {
+		t.Fatal("expected a job to be claimed")
+	}
+
+	if firstClaimed.ID != highJob.ID {
+		t.Fatalf(
+			"expected high-priority job %s first, got %s",
+			highJob.ID,
+			firstClaimed.ID,
+		)
+	}
+
+	if firstClaimed.Priority != "high" {
+		t.Fatalf(
+			"expected first priority high, got %s",
+			firstClaimed.Priority,
+		)
+	}
+
+	secondClaimed, claimed := testStore.ClaimNextJob()
+	if !claimed {
+		t.Fatal("expected second job to be claimed")
+	}
+
+	if secondClaimed.ID != normalJob.ID {
+		t.Fatalf(
+			"expected normal-priority job %s second, got %s",
+			normalJob.ID,
+			secondClaimed.ID,
+		)
+	}
+
+	if secondClaimed.Priority != "normal" {
+		t.Fatalf(
+			"expected second priority normal, got %s",
+			secondClaimed.Priority,
+		)
+	}
+
+	thirdClaimed, claimed := testStore.ClaimNextJob()
+	if !claimed {
+		t.Fatal("expected third job to be claimed")
+	}
+
+	if thirdClaimed.ID != lowJob.ID {
+		t.Fatalf(
+			"expected low-priority job %s third, got %s",
+			lowJob.ID,
+			thirdClaimed.ID,
+		)
+	}
+
+	if thirdClaimed.Priority != "low" {
+		t.Fatalf(
+			"expected third priority low, got %s",
+			thirdClaimed.Priority,
+		)
+	}
+}

@@ -1391,3 +1391,155 @@ func TestJobsHandlerPagination(t *testing.T) {
 		})
 	}
 }
+
+// ----------------------------------------------------
+// Job priority API tests
+// ----------------------------------------------------
+
+// If priority is not provided, the API should
+// automatically use normal priority.
+func TestCreateJobDefaultsToNormalPriority(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/jobs",
+		strings.NewReader(
+			`{"type":"priority_default_test","payload":{"message":"default priority"}}`,
+		),
+	)
+
+	request.Header.Set("Content-Type", "application/json")
+
+	response := httptest.NewRecorder()
+
+	JobsHandler(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf(
+			"expected status %d, got %d: %s",
+			http.StatusCreated,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var createdJob Job
+
+	if err := json.NewDecoder(response.Body).Decode(&createdJob); err != nil {
+		t.Fatalf(
+			"failed to decode response: %v",
+			err,
+		)
+	}
+
+	defer deleteTestJob(t, testStore, createdJob.ID)
+
+	if createdJob.Priority != "normal" {
+		t.Fatalf(
+			"expected priority normal, got %s",
+			createdJob.Priority,
+		)
+	}
+
+	savedJob, exists := testStore.Get(createdJob.ID)
+	if !exists {
+		t.Fatal("expected created job to exist in database")
+	}
+
+	if savedJob.Priority != "normal" {
+		t.Fatalf(
+			"expected stored priority normal, got %s",
+			savedJob.Priority,
+		)
+	}
+}
+
+// A valid high priority should be accepted and stored.
+func TestCreateJobAcceptsHighPriority(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/jobs",
+		strings.NewReader(
+			`{"type":"priority_high_test","priority":"high","payload":{"message":"high priority"}}`,
+		),
+	)
+
+	request.Header.Set("Content-Type", "application/json")
+
+	response := httptest.NewRecorder()
+
+	JobsHandler(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf(
+			"expected status %d, got %d: %s",
+			http.StatusCreated,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var createdJob Job
+
+	if err := json.NewDecoder(response.Body).Decode(&createdJob); err != nil {
+		t.Fatalf(
+			"failed to decode response: %v",
+			err,
+		)
+	}
+
+	defer deleteTestJob(t, testStore, createdJob.ID)
+
+	if createdJob.Priority != "high" {
+		t.Fatalf(
+			"expected priority high, got %s",
+			createdJob.Priority,
+		)
+	}
+
+	savedJob, exists := testStore.Get(createdJob.ID)
+	if !exists {
+		t.Fatal("expected high-priority job to exist in database")
+	}
+
+	if savedJob.Priority != "high" {
+		t.Fatalf(
+			"expected stored priority high, got %s",
+			savedJob.Priority,
+		)
+	}
+}
+
+// Unsupported priority values should be rejected.
+func TestCreateJobRejectsInvalidPriority(t *testing.T) {
+	testStore := setupHandlerTestStore(t)
+	defer testStore.Close()
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/jobs",
+		strings.NewReader(
+			`{"type":"priority_invalid_test","priority":"urgent","payload":{}}`,
+		),
+	)
+
+	request.Header.Set("Content-Type", "application/json")
+
+	response := httptest.NewRecorder()
+
+	JobsHandler(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d: %s",
+			http.StatusBadRequest,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+}

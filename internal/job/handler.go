@@ -15,6 +15,7 @@ var store *Store
 type CreateJobRequest struct {
 	Type        string         `json:"type"`
 	Payload     map[string]any `json:"payload"`
+	Priority    string         `json:"priority,omitempty"`
 	ScheduledAt *time.Time     `json:"scheduled_at,omitempty"`
 }
 
@@ -126,11 +127,30 @@ func createJob(
 		request.Payload = map[string]any{}
 	}
 
+	request.Priority = strings.ToLower(
+		strings.TrimSpace(request.Priority),
+	)
+
+	// If priority is not supplied, use normal priority.
+	if request.Priority == "" {
+		request.Priority = "normal"
+	}
+
+	if !isValidPriority(request.Priority) {
+		writeJSONError(
+			w,
+			"priority must be high, normal, or low",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
 	newJob := Job{
 		ID:          uuid.NewString(),
 		Type:        request.Type,
 		Payload:     request.Payload,
 		Status:      "queued",
+		Priority:    request.Priority,
 		Retries:     0,
 		MaxRetries:  3,
 		CreatedAt:   time.Now(),
@@ -519,6 +539,18 @@ func isValidStatus(status string) bool {
 		"completed",
 		"failed",
 		"cancelled":
+		return true
+
+	default:
+		return false
+	}
+}
+
+func isValidPriority(priority string) bool {
+	switch priority {
+	case "high",
+		"normal",
+		"low":
 		return true
 
 	default:
