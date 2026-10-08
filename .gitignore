@@ -15,3 +15,4 @@ Thumbs.db
 # VS Code local settings
 .vscode/
 .env.test
+test-results.txt
