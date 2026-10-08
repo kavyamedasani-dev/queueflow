@@ -18,7 +18,7 @@ import (
 func setupHandlerTestStore(t *testing.T) *Store {
 	t.Helper()
 
-	_ = godotenv.Load("../../.env")
+	_ = godotenv.Overload("../../.env.test")
 
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
@@ -1259,6 +1259,15 @@ func TestJobsHandlerPaginationValidation(t *testing.T) {
 func TestJobsHandlerPagination(t *testing.T) {
 	testStore := setupHandlerTestStore(t)
 	SetStore(testStore)
+	defer func() {
+		_, err := testStore.db.Exec(
+			context.Background(),
+			`DELETE FROM jobs WHERE type = 'pagination_test'`,
+		)
+		if err != nil {
+			t.Errorf("failed to clean up pagination test jobs: %v", err)
+		}
+	}()
 
 	// Start with a clean jobs table so this test has
 	// predictable results.

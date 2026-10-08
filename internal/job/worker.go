@@ -63,7 +63,25 @@ func runWorker(
 		default:
 		}
 
-		currentJob, exists := store.ClaimNextJob()
+		currentJob, exists, err := store.ClaimNextJob()
+
+		if err != nil {
+			log.Printf(
+				"Worker %d encountered a database error while claiming a job: %v",
+				workerID,
+				err,
+			)
+
+			// Wait before retrying to avoid repeatedly
+			// hitting the database during an outage.
+			select {
+			case <-ctx.Done():
+				log.Printf("Worker %d stopped", workerID)
+				return
+			case <-time.After(1 * time.Second):
+				continue
+			}
+		}
 
 		if !exists {
 			// Instead of blindly sleeping for one second,

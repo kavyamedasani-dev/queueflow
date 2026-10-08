@@ -12,8 +12,7 @@ import (
 func setupWorkerTestStore(t *testing.T) *Store {
 	t.Helper()
 
-	_ = godotenv.Load("../../.env")
-
+	_ = godotenv.Overload("../../.env.test")
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		t.Fatal("DATABASE_URL is required for worker integration tests")

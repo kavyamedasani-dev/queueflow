@@ -14,7 +14,7 @@ import (
 func setupStoreTest(t *testing.T) *Store {
 	t.Helper()
 
-	_ = godotenv.Load("../../.env")
+	_ = godotenv.Overload("../../.env.test")
 
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
@@ -284,7 +284,10 @@ func TestClaimNextJobSkipsFutureScheduledJob(t *testing.T) {
 		)
 	}
 
-	claimedJob, claimed := testStore.ClaimNextJob()
+	claimedJob, claimed, err := testStore.ClaimNextJob()
+	if err != nil {
+		t.Fatalf("failed to claim job: %v", err)
+	}
 
 	if claimed && claimedJob.ID == testJob.ID {
 		t.Fatal(
@@ -361,8 +364,13 @@ func TestClaimNextJobPreventsDuplicateClaim(t *testing.T) {
 	claim := func() {
 		defer wg.Done()
 
-		claimedJob, claimed :=
-			testStore.ClaimNextJob()
+		claimedJob, claimed, err := testStore.ClaimNextJob()
+		if err != nil {
+			t.Fatalf("failed to claim job: %v", err)
+		}
+		if err != nil {
+			t.Fatalf("failed to claim job: %v", err)
+		}
 
 		results <- claimResult{
 			job:     claimedJob,
@@ -739,8 +747,10 @@ func TestCancelledJobCannotBeClaimed(t *testing.T) {
 		)
 	}
 
-	claimedJob, claimed :=
-		testStore.ClaimNextJob()
+	claimedJob, claimed, err := testStore.ClaimNextJob()
+	if err != nil {
+		t.Fatalf("failed to claim job: %v", err)
+	}
 
 	if claimed &&
 		claimedJob.ID == testJob.ID {
@@ -1307,7 +1317,10 @@ func TestClaimNextJobRespectsPriority(t *testing.T) {
 		)
 	}
 
-	firstClaimed, claimed := testStore.ClaimNextJob()
+	firstClaimed, claimed, err := testStore.ClaimNextJob()
+	if err != nil {
+		t.Fatalf("failed to claim job: %v", err)
+	}
 	if !claimed {
 		t.Fatal("expected a job to be claimed")
 	}
@@ -1327,7 +1340,10 @@ func TestClaimNextJobRespectsPriority(t *testing.T) {
 		)
 	}
 
-	secondClaimed, claimed := testStore.ClaimNextJob()
+	secondClaimed, claimed, err := testStore.ClaimNextJob()
+	if err != nil {
+		t.Fatalf("failed to claim second job: %v", err)
+	}
 	if !claimed {
 		t.Fatal("expected second job to be claimed")
 	}
@@ -1347,7 +1363,10 @@ func TestClaimNextJobRespectsPriority(t *testing.T) {
 		)
 	}
 
-	thirdClaimed, claimed := testStore.ClaimNextJob()
+	thirdClaimed, claimed, err := testStore.ClaimNextJob()
+	if err != nil {
+		t.Fatalf("failed to claim third job: %v", err)
+	}
 	if !claimed {
 		t.Fatal("expected third job to be claimed")
 	}

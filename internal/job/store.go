@@ -329,12 +329,12 @@ func (s *Store) CancelJob(id string) (Job, bool) {
 // FOR UPDATE SKIP LOCKED allows multiple workers to
 // safely request jobs at the same time without
 // processing the same job.
-func (s *Store) ClaimNextJob() (Job, bool) {
+func (s *Store) ClaimNextJob() (Job, bool, error) {
 	ctx := context.Background()
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return Job{}, false
+		return Job{}, false, fmt.Errorf("failed to begin job claim transaction: %w", err)
 	}
 
 	defer func() {
@@ -388,10 +388,13 @@ func (s *Store) ClaimNextJob() (Job, bool) {
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return Job{}, false
+			return Job{}, false, nil
 		}
 
-		return Job{}, false
+		return Job{}, false, fmt.Errorf(
+			"failed to select next queued job: %w",
+			err,
+		)
 	}
 
 	if len(payload) > 0 {
@@ -399,7 +402,11 @@ func (s *Store) ClaimNextJob() (Job, bool) {
 			payload,
 			&job.Payload,
 		); err != nil {
-			return Job{}, false
+			return Job{}, false, fmt.Errorf(
+				"failed to decode payload for job %s: %w",
+				job.ID,
+				err,
+			)
 		}
 	}
 
@@ -414,16 +421,24 @@ func (s *Store) ClaimNextJob() (Job, bool) {
 	)
 
 	if err != nil {
-		return Job{}, false
+		return Job{}, false, fmt.Errorf(
+			"failed to mark job %s as processing: %w",
+			job.ID,
+			err,
+		)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return Job{}, false
+		return Job{}, false, fmt.Errorf(
+			"failed to commit claim for job %s: %w",
+			job.ID,
+			err,
+		)
 	}
 
 	job.Status = "processing"
 
-	return job, true
+	return job, true, nil
 }
 
 // Stats returns the current number of jobs in each
