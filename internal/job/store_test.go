@@ -1,6 +1,7 @@
 package job
 
 import (
+	"context"
 	"os"
 	"sync"
 	"testing"
@@ -246,6 +247,7 @@ func TestStoreIncrementRetry(t *testing.T) {
 
 // Test 4:
 // A future scheduled job must not be claimed yet.
+
 func TestClaimNextJobSkipsFutureScheduledJob(t *testing.T) {
 	testStore := setupStoreTest(t)
 	defer testStore.Close()
@@ -415,6 +417,37 @@ func TestClaimNextJobPreventsDuplicateClaim(t *testing.T) {
 		t.Fatalf(
 			"expected claimed job status processing, got %s",
 			savedJob.Status,
+		)
+	}
+
+	var processingStartedAt *time.Time
+
+	err := testStore.db.QueryRow(
+		context.Background(),
+		`
+	SELECT processing_started_at
+	FROM jobs
+	WHERE id = $1
+	`,
+		testJob.ID,
+	).Scan(&processingStartedAt)
+
+	if err != nil {
+		t.Fatalf(
+			"failed to read processing start time: %v",
+			err,
+		)
+	}
+
+	if processingStartedAt == nil {
+		t.Fatal(
+			"expected processing_started_at to be set when job is claimed",
+		)
+	}
+
+	if processingStartedAt.After(time.Now()) {
+		t.Fatal(
+			"processing_started_at cannot be in the future",
 		)
 	}
 }
@@ -1384,5 +1417,78 @@ func TestClaimNextJobRespectsPriority(t *testing.T) {
 			"expected third priority low, got %s",
 			thirdClaimed.Priority,
 		)
+	}
+}
+func TestRecoverProcessingJobs(t *testing.T) {
+	store := setupStoreTest(t)
+
+	jobID := "88888888-8888-4888-8888-888888888888"
+
+	// Clean up the test job before and after the test.
+	cleanup := func() {
+		_, _ = store.db.Exec(
+			context.Background(),
+			`DELETE FROM jobs WHERE id = $1`,
+			jobID,
+		)
+	}
+
+	cleanup()
+	t.Cleanup(cleanup)
+
+	// Insert a job that was interrupted during processing.
+	_, err := store.db.Exec(
+		context.Background(),
+		`
+		INSERT INTO jobs (
+			id, type, payload, status, priority,
+			retries, max_retries, created_at,
+			processing_started_at
+		)
+		VALUES (
+			$1, 'recovery_test', '{}', 'processing',
+			'normal', 0, 3, NOW(), NOW()
+		)
+		`,
+		jobID,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert test job: %v", err)
+	}
+
+	// Recover unfinished jobs.
+	recovered, err := store.RecoverProcessingJobs()
+	if err != nil {
+		t.Fatalf("recovery failed: %v", err)
+	}
+
+	if recovered < 1 {
+		t.Fatal("expected at least one recovered job")
+	}
+
+	// Verify the job is queued and its timestamp is cleared.
+	var status string
+	var processingStartedAt *time.Time
+
+	err = store.db.QueryRow(
+		context.Background(),
+		`
+		SELECT status, processing_started_at
+		FROM jobs
+		WHERE id = $1
+		`,
+		jobID,
+	).Scan(&status, &processingStartedAt)
+
+	if err != nil {
+		t.Fatalf("failed to read recovered job: %v", err)
+	}
+
+	if status != "queued" {
+		t.Fatalf("expected queued, got %s", status)
+	}
+
+	if processingStartedAt != nil {
+		t.Fatal("expected processing_started_at to be NULL")
 	}
 }

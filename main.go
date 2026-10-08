@@ -59,6 +59,22 @@ func main() {
 
 	log.Println("Connected to PostgreSQL")
 
+	// Recover unfinished jobs before starting workers.
+	// This is safe only when no other QueueFlow instance
+	// is processing jobs in the same database.
+	recovered, err := store.RecoverProcessingJobs()
+	if err != nil {
+		log.Fatalf(
+			"Failed to recover unfinished jobs: %v",
+			err,
+		)
+	}
+
+	log.Printf(
+		"Startup recovery complete: %d jobs returned to queue",
+		recovered,
+	)
+
 	// Create a context used to control the worker lifecycle.
 	workerContext, cancelWorkers := context.WithCancel(
 		context.Background(),

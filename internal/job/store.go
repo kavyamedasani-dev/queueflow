@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -45,7 +46,6 @@ func NewStore(databaseURL string) (*Store, error) {
 
 	if err := db.Ping(context.Background()); err != nil {
 		db.Close()
-
 		return nil, fmt.Errorf(
 			"unable to connect to database: %w",
 			err,
@@ -75,17 +75,17 @@ func (s *Store) Save(job Job) error {
 		context.Background(),
 		`
 		INSERT INTO jobs
-			(
-				id,
-				type,
-				payload,
-				status,
-				priority,
-				retries,
-				max_retries,
-				created_at,
-				scheduled_at
-			)
+		(
+			id,
+			type,
+			payload,
+			status,
+			priority,
+			retries,
+			max_retries,
+			created_at,
+			scheduled_at
+		)
 		VALUES
 			($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		`,
@@ -240,27 +240,32 @@ func (s *Store) ListFiltered(filter JobFilter) []Job {
 	return jobs
 }
 
-func (s *Store) UpdateStatus(
-	id string,
-	status string,
-) (Job, bool) {
-
+func (s *Store) UpdateStatus(id string, status string) (Job, bool) {
 	result, err := s.db.Exec(
 		context.Background(),
 		`
 		UPDATE jobs
-		SET status = $1
+		SET
+			status = $1,
+			processing_started_at = CASE
+				WHEN $3::text = 'processing'
+					THEN COALESCE(processing_started_at, NOW())
+				ELSE NULL
+			END
 		WHERE id = $2
 		`,
 		status,
 		id,
+		status,
 	)
 
 	if err != nil {
+		log.Printf("UpdateStatus database error: %v", err)
 		return Job{}, false
 	}
 
 	if result.RowsAffected() == 0 {
+		log.Printf("UpdateStatus: job %s not found", id)
 		return Job{}, false
 	}
 
@@ -270,7 +275,6 @@ func (s *Store) UpdateStatus(
 func (s *Store) IncrementRetry(
 	id string,
 ) (Job, bool) {
-
 	result, err := s.db.Exec(
 		context.Background(),
 		`
@@ -282,6 +286,7 @@ func (s *Store) IncrementRetry(
 	)
 
 	if err != nil {
+		log.Printf("IncrementRetry database error: %v", err)
 		return Job{}, false
 	}
 
@@ -320,7 +325,6 @@ func (s *Store) CancelJob(id string) (Job, bool) {
 // to run and changes its status from queued to processing.
 //
 // Jobs are claimed by priority:
-//
 // high -> normal -> low
 //
 // Jobs with the same priority are processed in
@@ -334,7 +338,10 @@ func (s *Store) ClaimNextJob() (Job, bool, error) {
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return Job{}, false, fmt.Errorf("failed to begin job claim transaction: %w", err)
+		return Job{}, false, fmt.Errorf(
+			"failed to begin job claim transaction: %w",
+			err,
+		)
 	}
 
 	defer func() {
@@ -414,7 +421,9 @@ func (s *Store) ClaimNextJob() (Job, bool, error) {
 		ctx,
 		`
 		UPDATE jobs
-		SET status = 'processing'
+		SET
+			status = 'processing',
+			processing_started_at = NOW()
 		WHERE id = $1
 		`,
 		job.ID,
@@ -439,6 +448,35 @@ func (s *Store) ClaimNextJob() (Job, bool, error) {
 	job.Status = "processing"
 
 	return job, true, nil
+}
+
+// RecoverProcessingJobs returns unfinished processing jobs
+// to the queue after an unexpected application shutdown.
+//
+// IMPORTANT:
+// Call only at application startup, before starting workers,
+// and only when no other QueueFlow instance is processing
+// jobs in the same database.
+func (s *Store) RecoverProcessingJobs() (int64, error) {
+	result, err := s.db.Exec(
+		context.Background(),
+		`
+		UPDATE jobs
+		SET
+			status = 'queued',
+			processing_started_at = NULL
+		WHERE status = 'processing'
+		`,
+	)
+
+	if err != nil {
+		return 0, fmt.Errorf(
+			"failed to recover processing jobs: %w",
+			err,
+		)
+	}
+
+	return result.RowsAffected(), nil
 }
 
 // Stats returns the current number of jobs in each
